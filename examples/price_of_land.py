@@ -49,7 +49,7 @@ LISTING_SCRAPES: tuple[tuple[str, Optional[int]], ...] = (
     ("sold", 365),
 )
 
-LISTING_TYPES_INCREMENTAL = ("for_sale", "pending", "sold")
+LISTING_TYPES_INCREMENTAL = ("for_sale",)
 LA_TIMEZONE = "America/Los_Angeles"
 
 STATUS_PRIORITY = {
