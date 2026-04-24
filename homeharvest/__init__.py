@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import warnings
 import pandas as pd
 from datetime import datetime, timedelta, date

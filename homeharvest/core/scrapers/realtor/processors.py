@@ -2,6 +2,8 @@
 Processors for realtor.com property data processing
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Optional
 from ..models import (
