@@ -1,0 +1,25 @@
+{
+  "thresholds": {
+    "min_beds": 3,
+    "min_full_baths": 2,
+    "min_list_price": 100000,
+    "max_list_price": 3000000
+  },
+  "requirements": {
+    "require_str_supported_neighborhood": true,
+    "require_pool": true,
+    "exclude_unknown_private_pool": true
+  },
+  "location": {
+    "enabled": true,
+    "preferred_cities": ["Palm Springs", "Indio", "Bermuda Dunes"]
+  },
+  "scoring_weights": {
+    "quality": 30,
+    "str_support": 25,
+    "pool": 20,
+    "beds_baths": 15,
+    "price_range": 5,
+    "location": 5
+  }
+}

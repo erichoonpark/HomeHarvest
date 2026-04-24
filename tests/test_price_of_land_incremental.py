@@ -10,12 +10,12 @@ import pandas as pd
 
 def _load_price_of_land_module():
     repo_root = Path(__file__).resolve().parents[1]
-    module_path = repo_root / "examples" / "price_of_land.py"
+    module_path = repo_root / "examples" / "scrape_listings_core.py"
     examples_dir = str(module_path.parent)
     if examples_dir not in sys.path:
         sys.path.insert(0, examples_dir)
 
-    spec = importlib.util.spec_from_file_location("price_of_land", module_path)
+    spec = importlib.util.spec_from_file_location("scrape_listings_core", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -200,3 +200,176 @@ def test_apply_incremental_upserts_updates_status_and_appends_new():
     assert appended_row["status"] == "FOR_SALE"
     assert appended_row["is_new_in_batch"] is True
     assert appended_row["is_status_updated_in_batch"] is False
+
+
+def test_filter_home_listings_excludes_mobile_like_and_invalid_rows():
+    pol = _load_price_of_land_module()
+
+    rows = pd.DataFrame(
+        [
+            {
+                "property_id": "ok1",
+                "street": "100 Main St",
+                "list_price": 450000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1600,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/100-Main-St_Palm-Springs_CA_92262_M11111-11111",
+            },
+            {
+                "property_id": "mobile1",
+                "street": "55 Desert Mobile Home Park",
+                "list_price": 420000,
+                "beds": 2,
+                "full_baths": 2,
+                "sqft": 900,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/55-Desert-Mobile-Home-Park_Palm-Springs_CA_92264_M22222-22222",
+            },
+            {
+                "property_id": "cheap1",
+                "street": "200 Main St",
+                "list_price": 45000,
+                "beds": 2,
+                "full_baths": 1,
+                "sqft": 800,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/200-Main-St_Palm-Springs_CA_92262_M33333-33333",
+            },
+            {
+                "property_id": "missing_specs",
+                "street": "300 Main St",
+                "list_price": 510000,
+                "beds": None,
+                "full_baths": None,
+                "sqft": None,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/300-Main-St_Palm-Springs_CA_92262_M44444-44444",
+            },
+            {
+                "property_id": "coown_variant",
+                "street": "1961 S Palm Canyon Dr",
+                "list_price": 265000,
+                "beds": 3,
+                "full_baths": 3,
+                "sqft": 2728,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/1961-S-Palm-Canyon-Dr-3_Palm-Springs_CA_92264_M96816-60407",
+            },
+        ]
+    )
+
+    filtered = pol.filter_home_listings(rows)
+    assert set(filtered["property_id"]) == {"ok1"}
+
+
+def test_filter_home_listings_excludes_manual_co_ownership_address():
+    pol = _load_price_of_land_module()
+
+    rows = pd.DataFrame(
+        [
+            {
+                "property_id": "1086968872",
+                "street": "470 E Avenida Olancha",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92264",
+                "list_price": 175000,
+                "beds": 5,
+                "full_baths": None,
+                "sqft": 1550,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/470-E-Avenida-Olancha_Palm-Springs_CA_92264_M10869-68872",
+            },
+            {
+                "property_id": "ok2",
+                "street": "101 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 450000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1600,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/101-Main-St_Palm-Springs_CA_92262_M11111-22222",
+            },
+        ]
+    )
+
+    filtered = pol.filter_home_listings(rows)
+    assert set(filtered["property_id"]) == {"ok2"}
+
+
+def test_enrich_and_enforce_required_baseline_fields():
+    pol = _load_price_of_land_module()
+
+    rows = pd.DataFrame(
+        [
+            {
+                "property_id": "ok1",
+                "property_url": "https://example.com/1",
+                "style": "SINGLE_FAMILY",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 500000,
+                "sqft": 2000,
+                "lot_sqft": 6500,
+                "pool_features": "private pool",
+            },
+            {
+                "property_id": "missing_lot",
+                "property_url": "https://example.com/2",
+                "style": "SINGLE_FAMILY",
+                "street": "200 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 600000,
+                "sqft": 1800,
+                "lot_sqft": None,
+                "pool_features": "",
+            },
+        ]
+    )
+
+    out = pol.enrich_and_enforce_required_baseline_fields(rows, zip_code="92262", listing_type="for_sale")
+    assert set(out["property_id"]) == {"ok1"}
+    kept = out.iloc[0]
+    assert round(float(kept["price_per_sqft"]), 2) == 250.0
+    assert bool(kept["has_pool_inferred"]) is True
+    assert bool(kept["pool_available"]) is True
+    assert bool(kept["is_private_pool"]) is True
+    assert bool(kept["is_private_pool_known"]) is True
+
+
+def test_extract_pool_mapping_uses_structured_details_private_yes():
+    pol = _load_price_of_land_module()
+    row = pd.Series(
+        {
+            "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes","Pool Features: In Ground, Private"]}]',
+            "raw_tags": '["community_swimming_pool","swimming_pool"]',
+            "raw_photo_tags": '[{"labels":["swimming_pool"]}]',
+        }
+    )
+
+    mapped = pol._extract_pool_mapping(row)
+    assert mapped["pool_type"] in {"private", "both"}
+    assert bool(mapped["pool_available"]) is True
+    assert bool(mapped["is_private_pool"]) is True
+    assert bool(mapped["is_private_pool_known"]) is True
+    assert mapped["pool_confidence"] == "high"
+
+
+def test_extract_pool_mapping_uses_structured_details_private_no():
+    pol = _load_price_of_land_module()
+    row = pd.Series(
+        {
+            "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: No","Pool Features: Community"]}]',
+            "raw_tags": '["community_swimming_pool"]',
+            "raw_photo_tags": "[]",
+        }
+    )
+
+    mapped = pol._extract_pool_mapping(row)
+    assert mapped["pool_type"] in {"community", "unknown"}
+    assert bool(mapped["pool_available"]) is True
+    assert bool(mapped["is_private_pool"]) is False
+    assert bool(mapped["is_private_pool_known"]) is True
+    assert mapped["pool_confidence"] == "high"

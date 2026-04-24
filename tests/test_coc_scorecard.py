@@ -101,6 +101,7 @@ def test_coc_columns_exist_and_rank_stable():
                 "full_baths": 2,
                 "sqft": 1800,
                 "property_url": "https://example.com/a",
+                "str_fit_pass": True,
             },
             {
                 "property_id": "B",
@@ -114,6 +115,7 @@ def test_coc_columns_exist_and_rank_stable():
                 "full_baths": 3,
                 "sqft": 3200,
                 "property_url": "https://example.com/b",
+                "str_fit_pass": True,
             },
             {
                 "property_id": "C",
@@ -124,6 +126,7 @@ def test_coc_columns_exist_and_rank_stable():
                 "zip_code": "92262",
                 "list_price": 800000,
                 "property_url": "https://example.com/c",
+                "str_fit_pass": True,
             },
         ]
     )
@@ -156,6 +159,7 @@ def test_workbook_generation_contains_required_sheets(tmp_path: Path):
                 "full_baths": 2,
                 "sqft": 1800,
                 "property_url": "https://example.com/a",
+                "str_fit_pass": True,
             }
         ]
     )
@@ -178,3 +182,184 @@ def test_load_assumptions_from_json(tmp_path: Path):
     path.write_text(json.dumps(_assumptions()), encoding="utf-8")
     loaded = module.load_assumptions(path)
     assert loaded["financing"]["interest_rate_annual"] == 0.0575
+
+
+def test_score_properties_prioritizes_str_fit_rows_in_ranking():
+    module = _load_module()
+    assumptions = _assumptions()
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+                "str_fit_pass": True,
+            },
+            {
+                "property_id": "MOBILE",
+                "status": "FOR_SALE",
+                "street": "55 Desert Mobile Home Park",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92264",
+                "list_price": 450000,
+                "beds": 2,
+                "full_baths": 2,
+                "sqft": 900,
+                "property_url": "https://example.com/mobile",
+                "str_fit_pass": False,
+            },
+            {
+                "property_id": "LOT",
+                "status": "FOR_SALE",
+                "street": "80394 Avenue 48",
+                "city": "Indio",
+                "state": "CA",
+                "zip_code": "92201",
+                "list_price": 30000,
+                "beds": None,
+                "full_baths": None,
+                "sqft": None,
+                "property_url": "https://example.com/lot",
+                "str_fit_pass": False,
+            },
+            {
+                "property_id": "SHARE_A",
+                "status": "FOR_SALE",
+                "street": "1961 S Palm Canyon Dr",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92264",
+                "list_price": 260000,
+                "beds": 3,
+                "full_baths": 3,
+                "sqft": 2728,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/1961-S-Palm-Canyon-Dr-3_Palm-Springs_CA_92264_M95667-30278",
+                "str_fit_pass": False,
+            },
+            {
+                "property_id": "SHARE_B",
+                "status": "FOR_SALE",
+                "street": "1961 S Palm Canyon Dr",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92264",
+                "list_price": 299000,
+                "beds": 3,
+                "full_baths": 3,
+                "sqft": 2728,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/1961-S-Palm-Canyon-Dr_Palm-Springs_CA_92264_M23103-18356",
+                "str_fit_pass": False,
+            },
+        ]
+    )
+
+    scored = module.score_properties(df, assumptions)
+    assert set(scored["property_id"]) == {"A", "MOBILE", "LOT", "SHARE_A", "SHARE_B"}
+    assert scored.iloc[0]["property_id"] == "A"
+    assert bool(scored.iloc[0]["str_fit_pass"]) is True
+
+
+def test_score_properties_keeps_manual_coownership_for_audit_but_ranks_fit_first():
+    module = _load_module()
+    assumptions = _assumptions()
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "1086968872",
+                "status": "FOR_SALE",
+                "street": "470 E Avenida Olancha",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92264",
+                "list_price": 175000,
+                "beds": 5,
+                "full_baths": None,
+                "sqft": 1550,
+                "property_url": "https://www.realtor.com/realestateandhomes-detail/470-E-Avenida-Olancha_Palm-Springs_CA_92264_M10869-68872",
+                "str_fit_pass": False,
+            },
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+                "str_fit_pass": True,
+            },
+        ]
+    )
+
+    scored = module.score_properties(df, assumptions)
+    assert set(scored["property_id"]) == {"A", "1086968872"}
+    assert scored.iloc[0]["property_id"] == "A"
+
+
+def test_score_properties_requires_str_fit_by_default():
+    module = _load_module()
+    assumptions = _assumptions()
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+            }
+        ]
+    )
+
+    try:
+        module.score_properties(df, assumptions)
+    except ValueError as exc:
+        assert "str_fit_pass" in str(exc)
+    else:
+        raise AssertionError("Expected score_properties to require str_fit_pass by default.")
+
+
+def test_score_properties_run_all_override():
+    module = _load_module()
+    assumptions = _assumptions()
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+            }
+        ]
+    )
+
+    scored = module.score_properties(df, assumptions, require_str_fit=False)
+    assert set(scored["property_id"]) == {"A"}
