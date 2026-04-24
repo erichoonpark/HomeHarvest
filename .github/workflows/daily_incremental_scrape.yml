@@ -1,0 +1,64 @@
+name: Daily Incremental Listings Scrape
+
+on:
+  schedule:
+    - cron: "10 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  incremental-scrape:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: daily-incremental-scrape
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+          poetry install --no-interaction --no-root
+          poetry run pip install openpyxl
+
+      - name: Run incremental scrape
+        run: poetry run python examples/price_of_land.py --mode incremental
+
+      - name: Detect data changes
+        id: detect_changes
+        run: |
+          if git diff --quiet -- examples/zips/combined.csv examples/zips/combined.xlsx; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create or update pull request
+        if: steps.detect_changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(data): daily incremental listings update"
+          title: "chore(data): daily incremental listings update"
+          body: |
+            Automated daily incremental HomeHarvest update.
+
+            - Mode: incremental
+            - Updated files:
+              - examples/zips/combined.csv
+              - examples/zips/combined.xlsx
+          branch: automation/daily-incremental-scrape
+          delete-branch: false
+          add-paths: |
+            examples/zips/combined.csv
+            examples/zips/combined.xlsx
