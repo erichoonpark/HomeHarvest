@@ -31,10 +31,19 @@ def test_compute_previous_day_window():
     assert end.isoformat() == "2026-04-23T23:59:59-07:00"
 
 
+def test_compute_recent_window_lookback_three_days():
+    pol = _load_price_of_land_module()
+
+    start, end = pol.compute_recent_window(run_date=pd.Timestamp("2026-04-24").date(), lookback_days=3)
+
+    assert start.isoformat() == "2026-04-21T00:00:00-07:00"
+    assert end.isoformat() == "2026-04-23T23:59:59-07:00"
+
+
 def test_resolve_window_from_args_override_dates():
     pol = _load_price_of_land_module()
 
-    args = SimpleNamespace(run_date=None, date_from="2026-04-20", date_to="2026-04-21")
+    args = SimpleNamespace(run_date=None, date_from="2026-04-20", date_to="2026-04-21", lookback_days=3)
     start, end = pol.resolve_window_from_args(args)
 
     assert start.isoformat() == "2026-04-20T00:00:00-07:00"
@@ -116,3 +125,24 @@ def test_filter_new_property_rows_bootstrap_empty_existing():
 
     assert len(new_rows) == 2
     assert set(new_rows["property_id"].tolist()) == {"111", "222"}
+
+
+def test_summarize_incremental_batch_reports_overlap():
+    pol = _load_price_of_land_module()
+
+    existing = pd.DataFrame([{"property_id": "111"}, {"property_id": "333"}])
+    fetched = pd.DataFrame(
+        [
+            {"property_id": "111", "status": "FOR_SALE"},
+            {"property_id": "222", "status": "FOR_SALE"},
+        ]
+    )
+    deduped = fetched.copy()
+    new_rows = pd.DataFrame([{"property_id": "222", "status": "FOR_SALE"}])
+
+    summary = pol.summarize_incremental_batch(existing, fetched, deduped, new_rows)
+
+    assert summary["fetched_rows"] == 2
+    assert summary["deduped_rows"] == 2
+    assert summary["existing_overlap_rows"] == 1
+    assert summary["new_rows"] == 1

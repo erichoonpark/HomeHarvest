@@ -69,6 +69,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--date-from", help="Optional override start datetime/date (ISO 8601).")
     parser.add_argument("--date-to", help="Optional override end datetime/date (ISO 8601).")
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=3,
+        help="Incremental reliability window when no explicit dates are provided (default: 3).",
+    )
     return parser.parse_args()
 
 
@@ -90,6 +96,26 @@ def compute_previous_day_window(
     target_day = run_date - timedelta(days=1)
     window_start = datetime.combine(target_day, time(0, 0, 0), tzinfo=tz)
     window_end = datetime.combine(target_day, time(23, 59, 59), tzinfo=tz)
+    return window_start, window_end
+
+
+def compute_recent_window(
+    *,
+    run_date: date | None = None,
+    lookback_days: int = 3,
+    tz_name: str = LA_TIMEZONE,
+) -> tuple[datetime, datetime]:
+    if lookback_days < 1:
+        raise ValueError("lookback_days must be >= 1.")
+
+    tz = ZoneInfo(tz_name)
+    if run_date is None:
+        run_date = datetime.now(tz).date()
+
+    end_day = run_date - timedelta(days=1)
+    start_day = run_date - timedelta(days=lookback_days)
+    window_start = datetime.combine(start_day, time(0, 0, 0), tzinfo=tz)
+    window_end = datetime.combine(end_day, time(23, 59, 59), tzinfo=tz)
     return window_start, window_end
 
 
@@ -116,7 +142,8 @@ def resolve_window_from_args(args: argparse.Namespace) -> tuple[datetime, dateti
         return start, end
 
     run_date = date.fromisoformat(args.run_date) if args.run_date else None
-    return compute_previous_day_window(run_date=run_date)
+    lookback_days = getattr(args, "lookback_days", 3)
+    return compute_recent_window(run_date=run_date, lookback_days=lookback_days)
 
 
 def get_property_details(
@@ -221,6 +248,31 @@ def filter_new_property_rows(existing_df: pd.DataFrame, deduped_batch_df: pd.Dat
     return candidate_df[~candidate_df["_property_id_key"].isin(existing_ids)].drop(columns=["_property_id_key"])
 
 
+def summarize_incremental_batch(
+    existing_df: pd.DataFrame,
+    fetched_df: pd.DataFrame,
+    deduped_batch_df: pd.DataFrame,
+    new_rows_df: pd.DataFrame,
+) -> dict[str, int]:
+    existing_ids = {
+        _normalize_property_id(v)
+        for v in existing_df.get("property_id", pd.Series(dtype="object")).tolist()
+        if _normalize_property_id(v)
+    }
+    deduped_ids = {
+        _normalize_property_id(v)
+        for v in deduped_batch_df.get("property_id", pd.Series(dtype="object")).tolist()
+        if _normalize_property_id(v)
+    }
+    overlap_count = len(deduped_ids & existing_ids)
+    return {
+        "fetched_rows": len(fetched_df),
+        "deduped_rows": len(deduped_batch_df),
+        "existing_overlap_rows": overlap_count,
+        "new_rows": len(new_rows_df),
+    }
+
+
 def output_zip_folder(zip_code: str, frames: dict[str, pd.DataFrame]) -> None:
     zip_folder = OUTPUT_DIR / zip_code
     zip_folder.mkdir(parents=True, exist_ok=True)
@@ -289,14 +341,13 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
             aliases_path=ALIASES_PATH,
         )
 
-    fetched_count = len(fetched_df)
-
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     existing_df = pd.read_excel(COMBINED_XLSX_PATH) if COMBINED_XLSX_PATH.exists() else pd.DataFrame()
 
     deduped_batch = dedupe_batch_by_property_id(fetched_df)
 
     incremental_new_rows = filter_new_property_rows(existing_df, deduped_batch)
+    summary = summarize_incremental_batch(existing_df, fetched_df, deduped_batch, incremental_new_rows)
 
     batch_run_at = datetime.now(ZoneInfo(LA_TIMEZONE)).isoformat()
     incremental_new_rows = incremental_new_rows.copy()
@@ -312,10 +363,11 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
 
     print(
         f"Incremental window: {window_start.isoformat()} -> {window_end.isoformat()}\n"
-        f"Fetched rows: {fetched_count}\n"
-        f"Rows after in-batch property_id dedupe: {len(deduped_batch)}\n"
-        f"New rows appended: {len(incremental_new_rows)}\n"
-        f"Skipped existing property_id rows: {max(0, len(deduped_batch) - len(incremental_new_rows))}\n"
+        f"Fetched rows: {summary['fetched_rows']}\n"
+        f"Rows after in-batch property_id dedupe: {summary['deduped_rows']}\n"
+        f"Overlap with existing property_id rows: {summary['existing_overlap_rows']}\n"
+        f"New rows appended: {summary['new_rows']}\n"
+        f"Skipped existing property_id rows: {max(0, summary['deduped_rows'] - summary['new_rows'])}\n"
         f"Combined total rows: {len(combined_df)}\n"
         f"Wrote: {COMBINED_CSV_PATH}\n"
         f"Wrote: {COMBINED_XLSX_PATH}"
