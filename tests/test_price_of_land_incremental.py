@@ -146,3 +146,57 @@ def test_summarize_incremental_batch_reports_overlap():
     assert summary["deduped_rows"] == 2
     assert summary["existing_overlap_rows"] == 1
     assert summary["new_rows"] == 1
+
+
+def test_apply_incremental_upserts_updates_status_and_appends_new():
+    pol = _load_price_of_land_module()
+
+    existing = pd.DataFrame(
+        [
+            {
+                "property_id": "111",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+            }
+        ]
+    )
+    deduped_batch = pd.DataFrame(
+        [
+            {
+                "property_id": "111",
+                "status": "PENDING",
+                "street": "100 Main St",
+            },
+            {
+                "property_id": "222",
+                "status": "FOR_SALE",
+                "street": "200 Main St",
+            },
+        ]
+    )
+
+    combined, new_rows, updated_count, unchanged_count = pol.apply_incremental_upserts(
+        existing,
+        deduped_batch,
+        batch_run_at="2026-04-24T08:00:00-07:00",
+        batch_window_start="2026-04-21T00:00:00-07:00",
+        batch_window_end="2026-04-23T23:59:59-07:00",
+    )
+
+    assert updated_count == 1
+    assert unchanged_count == 0
+    assert len(new_rows) == 1
+    assert len(combined) == 2
+
+    updated_row = combined[combined["property_id"] == "111"].iloc[0]
+    appended_row = combined[combined["property_id"] == "222"].iloc[0]
+
+    assert updated_row["status"] == "PENDING"
+    assert updated_row["is_status_updated_in_batch"] is True
+    assert updated_row["status_previous"] == "FOR_SALE"
+    assert updated_row["status_updated_to"] == "PENDING"
+    assert updated_row["is_new_in_batch"] is False
+
+    assert appended_row["status"] == "FOR_SALE"
+    assert appended_row["is_new_in_batch"] is True
+    assert appended_row["is_status_updated_in_batch"] is False

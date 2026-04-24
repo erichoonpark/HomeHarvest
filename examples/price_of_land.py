@@ -84,6 +84,12 @@ def _normalize_property_id(value: object) -> str:
     return str(value).strip()
 
 
+def _normalize_status(value: object) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    return str(value).strip().upper()
+
+
 def compute_previous_day_window(
     *,
     run_date: date | None = None,
@@ -253,6 +259,8 @@ def summarize_incremental_batch(
     fetched_df: pd.DataFrame,
     deduped_batch_df: pd.DataFrame,
     new_rows_df: pd.DataFrame,
+    status_updated_rows: int = 0,
+    unchanged_overlap_rows: int = 0,
 ) -> dict[str, int]:
     existing_ids = {
         _normalize_property_id(v)
@@ -270,7 +278,91 @@ def summarize_incremental_batch(
         "deduped_rows": len(deduped_batch_df),
         "existing_overlap_rows": overlap_count,
         "new_rows": len(new_rows_df),
+        "status_updated_rows": status_updated_rows,
+        "unchanged_overlap_rows": unchanged_overlap_rows,
     }
+
+
+def apply_incremental_upserts(
+    existing_df: pd.DataFrame,
+    deduped_batch_df: pd.DataFrame,
+    *,
+    batch_run_at: str,
+    batch_window_start: str,
+    batch_window_end: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, int, int]:
+    """
+    Upsert deduped batch into existing rows.
+
+    - New property_id -> append as new row.
+    - Existing property_id with changed status -> update existing row in place.
+    - Existing property_id with same status -> leave unchanged.
+    """
+    combined_df = existing_df.copy()
+
+    if deduped_batch_df.empty:
+        return combined_df, deduped_batch_df.copy(), 0, 0
+
+    if "property_id" not in combined_df.columns:
+        combined_df["property_id"] = pd.NA
+
+    index_by_property_id: dict[str, int] = {}
+    for idx, value in combined_df["property_id"].items():
+        property_id = _normalize_property_id(value)
+        if property_id:
+            # Keep last occurrence so updates target the most recent row.
+            index_by_property_id[property_id] = idx
+
+    new_rows: list[dict[str, object]] = []
+    status_updated_rows = 0
+    unchanged_overlap_rows = 0
+
+    for _, incoming_row in deduped_batch_df.iterrows():
+        incoming_dict = incoming_row.to_dict()
+        property_id = _normalize_property_id(incoming_dict.get("property_id"))
+        if not property_id:
+            continue
+
+        existing_idx = index_by_property_id.get(property_id)
+        incoming_status = _normalize_status(incoming_dict.get("status"))
+
+        if existing_idx is None:
+            incoming_dict["batch_run_at"] = batch_run_at
+            incoming_dict["batch_window_start"] = batch_window_start
+            incoming_dict["batch_window_end"] = batch_window_end
+            incoming_dict["ingest_mode"] = "incremental"
+            incoming_dict["is_new_in_batch"] = True
+            incoming_dict["is_status_updated_in_batch"] = False
+            incoming_dict["status_previous"] = pd.NA
+            incoming_dict["status_updated_to"] = incoming_status if incoming_status else pd.NA
+            new_rows.append(incoming_dict)
+            continue
+
+        previous_status = (
+            _normalize_status(combined_df.at[existing_idx, "status"]) if "status" in combined_df.columns else ""
+        )
+        if incoming_status and incoming_status != previous_status:
+            # Refresh existing row with incoming listing fields.
+            for col, value in incoming_dict.items():
+                combined_df.at[existing_idx, col] = value
+
+            combined_df.at[existing_idx, "batch_run_at"] = batch_run_at
+            combined_df.at[existing_idx, "batch_window_start"] = batch_window_start
+            combined_df.at[existing_idx, "batch_window_end"] = batch_window_end
+            combined_df.at[existing_idx, "ingest_mode"] = "incremental"
+            combined_df.at[existing_idx, "is_new_in_batch"] = False
+            combined_df.at[existing_idx, "is_status_updated_in_batch"] = True
+            combined_df.at[existing_idx, "status_previous"] = previous_status if previous_status else pd.NA
+            combined_df.at[existing_idx, "status_updated_to"] = incoming_status
+            status_updated_rows += 1
+        else:
+            unchanged_overlap_rows += 1
+
+    new_rows_df = pd.DataFrame(new_rows)
+    if not new_rows_df.empty:
+        combined_df = pd.concat([combined_df, new_rows_df], ignore_index=True, sort=False)
+
+    return combined_df, new_rows_df, status_updated_rows, unchanged_overlap_rows
 
 
 def output_zip_folder(zip_code: str, frames: dict[str, pd.DataFrame]) -> None:
@@ -346,18 +438,23 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
 
     deduped_batch = dedupe_batch_by_property_id(fetched_df)
 
-    incremental_new_rows = filter_new_property_rows(existing_df, deduped_batch)
-    summary = summarize_incremental_batch(existing_df, fetched_df, deduped_batch, incremental_new_rows)
-
     batch_run_at = datetime.now(ZoneInfo(LA_TIMEZONE)).isoformat()
-    incremental_new_rows = incremental_new_rows.copy()
-    incremental_new_rows["batch_run_at"] = batch_run_at
-    incremental_new_rows["batch_window_start"] = window_start.isoformat()
-    incremental_new_rows["batch_window_end"] = window_end.isoformat()
-    incremental_new_rows["ingest_mode"] = "incremental"
-    incremental_new_rows["is_new_in_batch"] = True
+    combined_df, incremental_new_rows, status_updated_rows, unchanged_overlap_rows = apply_incremental_upserts(
+        existing_df,
+        deduped_batch,
+        batch_run_at=batch_run_at,
+        batch_window_start=window_start.isoformat(),
+        batch_window_end=window_end.isoformat(),
+    )
+    summary = summarize_incremental_batch(
+        existing_df,
+        fetched_df,
+        deduped_batch,
+        incremental_new_rows,
+        status_updated_rows=status_updated_rows,
+        unchanged_overlap_rows=unchanged_overlap_rows,
+    )
 
-    combined_df = pd.concat([existing_df, incremental_new_rows], ignore_index=True, sort=False)
     combined_df.to_csv(COMBINED_CSV_PATH, index=False)
     combined_df.to_excel(COMBINED_XLSX_PATH, index=False)
 
@@ -367,7 +464,9 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
         f"Rows after in-batch property_id dedupe: {summary['deduped_rows']}\n"
         f"Overlap with existing property_id rows: {summary['existing_overlap_rows']}\n"
         f"New rows appended: {summary['new_rows']}\n"
-        f"Skipped existing property_id rows: {max(0, summary['deduped_rows'] - summary['new_rows'])}\n"
+        f"Existing rows updated due to status change: {summary['status_updated_rows']}\n"
+        f"Existing rows unchanged (same status): {summary['unchanged_overlap_rows']}\n"
+        f"Skipped existing property_id rows: {max(0, summary['existing_overlap_rows'] - summary['status_updated_rows'])}\n"
         f"Combined total rows: {len(combined_df)}\n"
         f"Wrote: {COMBINED_CSV_PATH}\n"
         f"Wrote: {COMBINED_XLSX_PATH}"
