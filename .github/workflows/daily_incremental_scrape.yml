@@ -30,7 +30,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install poetry
           poetry install --no-interaction
+          poetry run pip install -e .
           poetry run pip install openpyxl
+
+      - name: Debug Poetry environment
+        run: |
+          poetry env info
+          poetry run python -V
+          poetry run python -c "import sys; print('\n'.join(sys.path))"
+
+      - name: Verify homeharvest import
+        run: poetry run python -c "import homeharvest; print(homeharvest.__file__)"
 
       - name: Run incremental scrape
         run: poetry run python examples/price_of_land.py --mode incremental
