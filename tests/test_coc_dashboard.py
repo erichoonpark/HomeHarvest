@@ -101,10 +101,15 @@ def test_build_dashboard_payload_has_widgets_data():
 
     assert payload["total_ingested"] == 2
     assert payload["total_str_fit_passed"] == 1
-    assert len(payload["top_properties_fit"]) == 1
-    assert len(payload["homes_fit"]) == 1
-    assert "total_cash_cost_to_buy" in payload["homes_fit"][0]
-    assert "adr_low" in payload["homes_fit"][0]
+    assert len(payload["top_properties"]) == 1
+    assert len(payload["homes"]) == 1
+    assert "total_cash_cost_to_buy" in payload["homes"][0]
+    assert "adr_low" in payload["homes"][0]
+    assert "property_url" in payload["top_properties"][0]
+    assert "ai_insight_potential" in payload["top_properties"][0]
+    assert "ai_insight_risk" in payload["top_properties"][0]
+    assert "ai_insight_potential" in payload["homes"][0]
+    assert "ai_insight_risk" in payload["homes"][0]
 
 
 def test_render_dashboard_html_contains_expected_sections():
@@ -114,9 +119,12 @@ def test_render_dashboard_html_contains_expected_sections():
 
     assert "Total Ingested" in html
     assert "STR Fit Passed" in html
-    assert "Top 5 Properties by COC Return" in html
-    assert "STR Fit Only" in html
-    assert "All Ingested" in html
+    assert "Top 5 STR-Passing Properties by COC Return" in html
+    assert "View Listing" in html
+    assert 'target="_blank"' in html
+    assert "Potential:" in html
+    assert "Risk:" in html
+    assert "STR Filter Snapshot" in html
     assert "Home Breakdown with ADR + Occupancy Sliders" in html
     assert "payload" in html
 
@@ -130,3 +138,74 @@ def test_write_dashboard_html_creates_file(tmp_path: Path):
     assert out.exists()
     text = out.read_text(encoding="utf-8")
     assert "COC Dashboard" in text
+
+
+def test_top_properties_are_str_fit_only_and_deterministic_tiebreak():
+    module = _load_module()
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "Z9",
+                "status": "FOR_SALE",
+                "street": "9 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 500000,
+                "property_url": "https://example.com/z9",
+                "coc_med": 0.08,
+                "str_fit_score": 95,
+                "str_fit_pass": True,
+                "annual_cash_flow_med": 10000,
+            },
+            {
+                "property_id": "A1",
+                "status": "FOR_SALE",
+                "street": "1 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 510000,
+                "property_url": "https://example.com/a1",
+                "coc_med": 0.08,
+                "str_fit_score": 95,
+                "str_fit_pass": True,
+                "annual_cash_flow_med": 9000,
+            },
+            {
+                "property_id": "B2",
+                "status": "FOR_SALE",
+                "street": "2 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 520000,
+                "property_url": "https://example.com/b2",
+                "coc_med": 0.12,
+                "str_fit_score": 80,
+                "str_fit_pass": True,
+                "annual_cash_flow_med": 12000,
+            },
+            {
+                "property_id": "X0",
+                "status": "FOR_SALE",
+                "street": "0 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 530000,
+                "property_url": "https://example.com/x0",
+                "coc_med": 0.20,
+                "str_fit_score": 99,
+                "str_fit_pass": False,
+                "annual_cash_flow_med": 15000,
+            },
+        ]
+    )
+
+    payload = module.build_dashboard_payload(df, top_n=5, homes_limit=10)
+    top_ids = [row["property_id"] for row in payload["top_properties"]]
+
+    assert "X0" not in top_ids
+    assert top_ids == ["B2", "A1", "Z9"]
+    assert len(top_ids) <= 5

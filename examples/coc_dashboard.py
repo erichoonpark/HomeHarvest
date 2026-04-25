@@ -46,6 +46,63 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _ai_insights(row: pd.Series) -> dict[str, str]:
+    coc_med = _safe_float(row.get("coc_med"))
+    coc_low = _safe_float(row.get("coc_low"))
+    annual_cash_flow_med = _safe_float(row.get("annual_cash_flow_med"))
+    list_price = _safe_float(row.get("list_price"))
+    total_cash_cost_to_buy = _safe_float(row.get("total_cash_cost_to_buy"))
+    str_fit_score = _safe_float(row.get("str_fit_score"))
+    occ_low = _safe_float(row.get("occupancy_low"))
+    occ_high = _safe_float(row.get("occupancy_high"))
+    adr_med = _safe_float(row.get("adr_med"))
+    fail_reasons = _safe_str(row.get("str_fit_reasons_fail")).lower()
+
+    if coc_med >= 0.12:
+        potential = "Potential: Strong projected COC return with attractive STR upside."
+    elif coc_med >= 0.06:
+        potential = "Potential: Solid projected COC return with healthy yield profile."
+    elif coc_med > 0:
+        potential = "Potential: Positive projected COC return with moderate upside."
+    else:
+        potential = "Potential: Limited return profile; upside depends on operational improvements."
+
+    if annual_cash_flow_med > 15000:
+        potential = f"{potential[:-1]} Cash flow outlook is robust."
+    elif annual_cash_flow_med > 0:
+        potential = f"{potential[:-1]} Cash flow outlook is positive."
+
+    if occ_low >= 0.5 and occ_high >= 0.65:
+        potential = f"{potential[:-1]} Occupancy range suggests resilient demand."
+
+    if str_fit_score >= 85:
+        potential = f"{potential[:-1]} STR-fit score supports investment confidence."
+
+    risk = "Risk: "
+    risk_parts: list[str] = []
+    if coc_low < 0:
+        risk_parts.append("downside scenario can turn cash flow negative")
+    if annual_cash_flow_med <= 0:
+        risk_parts.append("base-case annual cash flow is negative")
+    elif annual_cash_flow_med < 6000:
+        risk_parts.append("base-case cash flow is thin")
+    if total_cash_cost_to_buy >= 250000:
+        risk_parts.append("high upfront capital requirement")
+    if list_price >= 1200000:
+        risk_parts.append("premium pricing increases acquisition risk")
+    if "private pool unknown" in fail_reasons:
+        risk_parts.append("pool data is incomplete and may affect STR appeal")
+    if adr_med > 0 and occ_low < 0.45:
+        risk_parts.append("lower occupancy downside could pressure ADR assumptions")
+
+    if not risk_parts:
+        risk += "No major red flags in current underwriting inputs."
+    else:
+        risk += "; ".join(risk_parts[:2]).capitalize() + "."
+
+    return {"potential": potential, "risk": risk}
+
+
 def load_scored_data(path: str | Path) -> pd.DataFrame:
     workbook = Path(path)
     if not workbook.exists():
@@ -78,6 +135,8 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
     zip_code = _safe_str(row.get("zip_code"))
     address = ", ".join([p for p in [street, city, state, zip_code] if p])
 
+    insights = _ai_insights(row)
+
     return {
         "property_id": _safe_str(row.get("property_id")),
         "address": address,
@@ -107,12 +166,15 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
         "str_fit_score": _safe_float(row.get("str_fit_score")),
         "str_fit_reasons_pass": _safe_str(row.get("str_fit_reasons_pass")),
         "str_fit_reasons_fail": _safe_str(row.get("str_fit_reasons_fail")),
+        "ai_insight_potential": insights["potential"],
+        "ai_insight_risk": insights["risk"],
     }
 
 
 def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
     top_rows: list[dict[str, Any]] = []
     for _, row in df.head(top_n).iterrows():
+        insights = _ai_insights(row)
         top_rows.append(
             {
                 "property_id": _safe_str(row.get("property_id")),
@@ -131,7 +193,11 @@ def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
                 "list_price": _safe_float(row.get("list_price")),
                 "coc_med": _safe_float(row.get("coc_med")),
                 "annual_cash_flow_med": _safe_float(row.get("annual_cash_flow_med")),
+                "str_fit_score": _safe_float(row.get("str_fit_score")),
                 "str_fit_pass": _safe_bool(row.get("str_fit_pass")),
+                "property_url": _safe_str(row.get("property_url")),
+                "ai_insight_potential": insights["potential"],
+                "ai_insight_risk": insights["risk"],
             }
         )
     return top_rows
@@ -145,27 +211,31 @@ def build_dashboard_payload(scored_df: pd.DataFrame, *, top_n: int = 5, homes_li
     if "str_fit_pass" not in scored.columns:
         scored["str_fit_pass"] = True
 
-    if "coc_med" in scored.columns:
-        scored = scored.sort_values(by=["coc_med", "property_id"], ascending=[False, True], kind="mergesort")
+    if "str_fit_score" not in scored.columns:
+        scored["str_fit_score"] = 0.0
 
     fit = scored[scored["str_fit_pass"].fillna(False).astype(bool)].copy()
+    fit = fit.sort_values(
+        by=["coc_med", "str_fit_score", "property_id"], ascending=[False, False, True], kind="mergesort"
+    )
 
-    top_all = _top_rows(scored, top_n)
     top_fit = _top_rows(fit, top_n)
-    homes_all = [_row_to_home_payload(row) for _, row in scored.head(homes_limit).iterrows()]
     homes_fit = [_row_to_home_payload(row) for _, row in fit.head(homes_limit).iterrows()]
 
     return {
         "total_ingested": int(len(scored)),
         "total_str_fit_passed": int(len(fit)),
-        "top_properties_all": top_all,
-        "top_properties_fit": top_fit,
-        "homes_all": homes_all,
-        "homes_fit": homes_fit,
-        "default_mode": "str_fit",
         "top_properties": top_fit,
         "homes": homes_fit,
         "total_houses_on_sale": int(len(scored)),
+        "str_filter_snapshot": [
+            "Quality checks required",
+            "STR-supported neighborhood required",
+            "Beds/Baths minimum: 2+/2+",
+            "List price range: $100,000 to $3,000,000",
+            "Preferred cities: Palm Springs, Indio, Bermuda Dunes",
+            "ZIP must be in under-cap STR geography",
+        ],
     }
 
 
@@ -197,12 +267,14 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     .hero .big {{ font-size: 42px; font-weight: 800; color: var(--accent); line-height: 1; }}
     .tablecard {{ grid-column: span 8; }}
     .title {{ margin: 0 0 14px; font-size: 20px; font-weight: 700; }}
-    .toolbar {{ display: flex; gap: 8px; margin-bottom: 10px; }}
-    .btn {{ border: 1px solid var(--line); background: #f8fafc; color: var(--ink); padding: 8px 12px; border-radius: 999px; cursor: pointer; font-size: 13px; }}
-    .btn.active {{ background: #e0f2fe; border-color: #7dd3fc; color: #0c4a6e; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th, td {{ border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }}
     th {{ color: var(--muted); font-weight: 700; }}
+    a.link {{ color: #1d4ed8; text-decoration: none; font-weight: 600; }}
+    a.link:hover {{ text-decoration: underline; }}
+    .snapshot {{ margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.5; }}
+    .snapshot ul {{ margin: 8px 0 0; padding-left: 18px; }}
+    .insight {{ font-size: 12px; color: #334155; line-height: 1.4; }}
     .breakdown {{ grid-column: span 12; }}
     .controls {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
     label {{ display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }}
@@ -237,17 +309,17 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         <div class=\"sub\">Rows meeting STR suitability rules.</div>
       </div>
       <div class=\"card tablecard\">
-        <h3 class=\"title\">Top 5 Properties by COC Return</h3>
-        <div class=\"toolbar\">
-          <button id=\"mode-fit\" class=\"btn\">STR Fit Only</button>
-          <button id=\"mode-all\" class=\"btn\">All Ingested</button>
-        </div>
+        <h3 class=\"title\">Top 5 STR-Passing Properties by COC Return</h3>
         <table>
           <thead>
-            <tr><th>Property</th><th>List Price</th><th>COC (Med)</th><th>Annual Cash Flow (Med)</th></tr>
+            <tr><th>Property</th><th>List Price</th><th>COC (Med)</th><th>Annual Cash Flow (Med)</th><th>AI Insights</th></tr>
           </thead>
           <tbody id=\"top5-body\"></tbody>
         </table>
+        <div class=\"snapshot\">
+          <strong>STR Filter Snapshot</strong>
+          <ul id=\"filter-snapshot\"></ul>
+        </div>
       </div>
       <div class=\"card breakdown\">
         <h3 class=\"title\">Home Breakdown with ADR + Occupancy Sliders (Low / Base / High)</h3>
@@ -290,33 +362,19 @@ const payload = {data_json};
 const currency = new Intl.NumberFormat('en-US', {{ style: 'currency', currency: 'USD', maximumFractionDigits: 0 }});
 const pct = (v) => `${{(v*100).toFixed(2)}}%`;
 
-let mode = payload.default_mode === 'all' ? 'all' : 'str_fit';
-
-function modeRows() {{
-  if (mode === 'all') {{
-    return {{ top: payload.top_properties_all || [], homes: payload.homes_all || [] }};
-  }}
-  return {{ top: payload.top_properties_fit || [], homes: payload.homes_fit || [] }};
-}}
-
-function setMode(nextMode) {{
-  mode = nextMode;
-  document.getElementById('mode-fit').classList.toggle('active', mode === 'str_fit');
-  document.getElementById('mode-all').classList.toggle('active', mode === 'all');
-  renderTopFive();
-  populateHomes();
-  updateForHome(0);
-}}
-
 function renderTopFive() {{
   const body = document.getElementById('top5-body');
   body.innerHTML = '';
-  modeRows().top.forEach((p) => {{
+  (payload.top_properties || []).forEach((p) => {{
+    const listing = p.property_url
+      ? `<a class="link" href="${{p.property_url}}" target="_blank" rel="noopener noreferrer">View Listing</a>`
+      : `<span style="color:#94a3b8">No link</span>`;
     const row = document.createElement('tr');
-    row.innerHTML = `<td><strong>${{p.property_id}}</strong><br><span style="color:#64748b">${{p.address}}</span></td>
+    row.innerHTML = `<td><strong>${{p.property_id}}</strong><br><span style="color:#64748b">${{p.address}}</span><br>${{listing}}</td>
       <td>${{currency.format(p.list_price)}}</td>
       <td>${{pct(p.coc_med)}}</td>
-      <td>${{currency.format(p.annual_cash_flow_med)}}</td>`;
+      <td>${{currency.format(p.annual_cash_flow_med)}}</td>
+      <td class="insight"><div>${{p.ai_insight_potential || 'Potential: n/a'}}</div><div>${{p.ai_insight_risk || 'Risk: n/a'}}</div></td>`;
     body.appendChild(row);
   }});
 }}
@@ -324,7 +382,7 @@ function renderTopFive() {{
 function populateHomes() {{
   const select = document.getElementById('home-select');
   select.innerHTML = '';
-  modeRows().homes.forEach((h, idx) => {{
+  (payload.homes || []).forEach((h, idx) => {{
     const opt = document.createElement('option');
     opt.value = String(idx);
     opt.textContent = `${{h.property_id}} - ${{currency.format(h.list_price)}} - ${{h.address}}`;
@@ -333,7 +391,7 @@ function populateHomes() {{
 }}
 
 function updateForHome(idx) {{
-  const rows = modeRows().homes;
+  const rows = payload.homes || [];
   const home = rows[idx] || rows[0];
   if (!home) return;
 
@@ -389,14 +447,19 @@ function updateForHome(idx) {{
 function init() {{
   document.getElementById('total-ingested').textContent = String(payload.total_ingested || 0);
   document.getElementById('total-fit').textContent = String(payload.total_str_fit_passed || 0);
-
-  document.getElementById('mode-fit').addEventListener('click', () => setMode('str_fit'));
-  document.getElementById('mode-all').addEventListener('click', () => setMode('all'));
+  const snapshot = document.getElementById('filter-snapshot');
+  (payload.str_filter_snapshot || []).forEach((line) => {{
+    const item = document.createElement('li');
+    item.textContent = line;
+    snapshot.appendChild(item);
+  }});
 
   const select = document.getElementById('home-select');
   select.addEventListener('change', (e) => updateForHome(Number(e.target.value)));
 
-  setMode(mode);
+  renderTopFive();
+  populateHomes();
+  updateForHome(0);
 }}
 
 init();
@@ -421,8 +484,8 @@ def main() -> None:
         f"Input scored rows: {len(scored_df)}\n"
         f"Total ingested: {payload['total_ingested']}\n"
         f"STR fit passed: {payload['total_str_fit_passed']}\n"
-        f"Top rows displayed: {len(payload['top_properties_fit'])}\n"
-        f"Interactive homes loaded (STR fit): {len(payload['homes_fit'])}\n"
+        f"Top rows displayed: {len(payload['top_properties'])}\n"
+        f"Interactive homes loaded (STR fit): {len(payload['homes'])}\n"
         f"Dashboard HTML: {Path(args.output).resolve()}"
     )
 
