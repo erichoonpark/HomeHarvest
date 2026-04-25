@@ -1,25 +1,47 @@
 {
-  "thresholds": {
-    "min_beds": 3,
+  "hard_gates": {
+    "require_quality": true,
+    "require_str_supported_neighborhood": true,
+    "require_price_range": true,
+    "require_beds_baths": true,
+    "require_location": true,
+    "require_geo_cap_zip": true,
+    "min_beds": 2,
     "min_full_baths": 2,
     "min_list_price": 100000,
     "max_list_price": 3000000
   },
-  "requirements": {
-    "require_str_supported_neighborhood": true,
-    "require_pool": true,
-    "exclude_unknown_private_pool": true
-  },
   "location": {
     "enabled": true,
-    "preferred_cities": ["Palm Springs", "Indio", "Bermuda Dunes"]
+    "preferred_cities": ["Palm Springs", "Indio", "Bermuda Dunes"],
+    "scope_zip_candidates": ["92258", "92262", "92263", "92264", "92201", "92203"]
   },
-  "scoring_weights": {
+  "geography": {
+    "enabled": true,
+    "require_under_cap_zip": true,
+    "cap_percentage_max": 0.2,
+    "neighborhood_cap_workbook": "examples/zips/palm_springs_neighborhood_cap_by_zip.xlsx",
+    "zip_codes_column": "zip_codes",
+    "primary_zip_column": "primary_zip",
+    "percentage_column": "current_neighborhood_percentage",
+    "fail_open_if_missing_cap_data": true
+  },
+  "ranking_weights": {
     "quality": 30,
     "str_support": 25,
-    "pool": 20,
     "beds_baths": 15,
     "price_range": 5,
-    "location": 5
+    "location": 5,
+    "geo_cap_zip": 10,
+    "pool_signal": 20
+  },
+  "shortlist": {
+    "enabled": true,
+    "target_pass_rate_min": 0.1,
+    "target_pass_rate_max": 0.2,
+    "target_pass_rate_target": 0.15,
+    "ranking_metric": "coc_med",
+    "ranking_direction": "desc",
+    "coc_assumptions_path": "examples/data/coc_assumptions.json"
   }
 }

@@ -55,7 +55,9 @@ jobs:
           fi
 
       - name: Create or update pull request
+        id: create_pr
         if: steps.detect_changes.outputs.changed == 'true'
+        continue-on-error: true
         uses: peter-evans/create-pull-request@v6
         with:
           commit-message: "chore(data): daily incremental listings update"
@@ -72,3 +74,8 @@ jobs:
           add-paths: |
             examples/zips/combined.csv
             examples/zips/combined.xlsx
+
+      - name: Report PR creation fallback
+        if: steps.detect_changes.outputs.changed == 'true' && steps.create_pr.outcome == 'failure'
+        run: |
+          echo "::warning::Scrape data was generated and branch push likely succeeded, but automated PR creation is blocked by repository policy. Enable 'Allow GitHub Actions to create and approve pull requests' or create the PR manually from branch automation/daily-incremental-scrape."

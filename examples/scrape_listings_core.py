@@ -596,6 +596,11 @@ def get_property_details(
         "sold_price",
         "price_per_sqft",
         "lot_sqft",
+        "lot_size_sqft",
+        "text",
+        "listing_description",
+        "hoa_fee",
+        "hoa_monthly_fee",
     ]
     optional_columns = [
         "raw_details",
@@ -610,7 +615,6 @@ def get_property_details(
         "description",
         "remarks",
         "features",
-        "hoa_fee",
     ]
     missing = [c for c in selected_columns if c not in properties.columns]
     if missing:
@@ -794,6 +798,14 @@ def output_zip_folder(zip_code: str, frames: dict[str, pd.DataFrame]) -> None:
         df.to_excel(f"{base}.xlsx", index=False)
 
 
+def normalize_combined_export_columns(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    # Keep only the canonical neighborhood column in aggregate outputs.
+    if "str_organized_neighborhood" in normalized.columns and "neighborhoods" in normalized.columns:
+        normalized = normalized.drop(columns=["neighborhoods"])
+    return normalized
+
+
 def run_full_mode() -> None:
     combined_df = pd.DataFrame()
     for zip_code in STR_FRIENDLY_ZIP_CODES:
@@ -811,6 +823,7 @@ def run_full_mode() -> None:
         crosswalk_path=CROSSWALK_PATH,
         aliases_path=ALIASES_PATH,
     )
+    combined_df = normalize_combined_export_columns(combined_df)
     neighborhood_zip_df = build_neighborhood_zip_table(SUMMARY_PATH, CROSSWALK_PATH)
 
     combined_df.to_csv(COMBINED_CSV_PATH, index=False)
@@ -874,6 +887,7 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
         status_updated_rows=status_updated_rows,
         unchanged_overlap_rows=unchanged_overlap_rows,
     )
+    combined_df = normalize_combined_export_columns(combined_df)
 
     combined_df.to_csv(COMBINED_CSV_PATH, index=False)
     combined_df.to_excel(COMBINED_XLSX_PATH, index=False)

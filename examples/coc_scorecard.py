@@ -332,7 +332,7 @@ def _score_row(
         "city": row.get("city"),
         "state": row.get("state"),
         "zip_code": row.get("zip_code"),
-        "neighborhoods": row.get("neighborhoods"),
+        "str_organized_neighborhood": row.get("str_organized_neighborhood") or row.get("neighborhoods"),
         "beds": row.get("beds"),
         "full_baths": row.get("full_baths"),
         "sqft": row.get("sqft"),
@@ -355,8 +355,15 @@ def _score_row(
         "str_fit_reasons_fail": row.get("str_fit_reasons_fail"),
         "has_pool_inferred": row.get("has_pool_inferred"),
         "has_pool_source": row.get("has_pool_source"),
+        "pool_signal_score": row.get("pool_signal_score"),
+        "pool_signal_confidence": row.get("pool_signal_confidence"),
         "quality_pass": row.get("quality_pass"),
         "quality_exclusion_reason": row.get("quality_exclusion_reason"),
+        "eligible_geo_cap_zip": row.get("eligible_geo_cap_zip"),
+        "geo_cap_zip_reason": row.get("geo_cap_zip_reason"),
+        "is_shortlist_candidate": row.get("is_shortlist_candidate"),
+        "shortlist_rank": row.get("shortlist_rank"),
+        "shortlist_reason": row.get("shortlist_reason"),
     }
 
     pct_ops = (

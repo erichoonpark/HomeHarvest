@@ -373,3 +373,57 @@ def test_extract_pool_mapping_uses_structured_details_private_no():
     assert bool(mapped["is_private_pool"]) is False
     assert bool(mapped["is_private_pool_known"]) is True
     assert mapped["pool_confidence"] == "high"
+
+
+def test_get_property_details_retains_baseline_alias_fields(monkeypatch):
+    pol = _load_price_of_land_module()
+
+    fake = pd.DataFrame(
+        [
+            {
+                "property_url": "https://example.com/home/1",
+                "property_id": "abc123",
+                "style": "SINGLE_FAMILY",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "county": "Riverside",
+                "neighborhoods": "Baristo",
+                "latitude": 33.8,
+                "longitude": -116.5,
+                "beds": 3,
+                "full_baths": 2,
+                "half_baths": 0,
+                "sqft": 1800,
+                "year_built": 1990,
+                "days_on_mls": 2,
+                "list_date": "2026-04-23 08:00:00",
+                "last_sold_date": None,
+                "list_price": 550000,
+                "sold_price": None,
+                "price_per_sqft": 100.0,
+                "lot_sqft": 8712,
+                "lot_size_sqft": 8712,
+                "text": "A beautiful single-family listing.",
+                "listing_description": "A beautiful single-family listing.",
+                "hoa_fee": 365,
+                "hoa_monthly_fee": 365,
+                "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes"]}]',
+                "raw_tags": '["swimming_pool"]',
+                "raw_photo_tags": '[{"labels":["swimming_pool"]}]',
+            }
+        ]
+    )
+
+    monkeypatch.setattr(pol, "scrape_property", lambda **kwargs: fake.copy())
+    out = pol.get_property_details("92262", "for_sale", past_days=30)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["lot_sqft"] == 8712
+    assert row["lot_size_sqft"] == 8712
+    assert row["text"] == "A beautiful single-family listing."
+    assert row["listing_description"] == "A beautiful single-family listing."
+    assert row["hoa_fee"] == 365
+    assert row["hoa_monthly_fee"] == 365

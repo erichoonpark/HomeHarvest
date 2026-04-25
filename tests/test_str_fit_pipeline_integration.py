@@ -60,28 +60,50 @@ def _coc_assumptions() -> dict:
 
 def _str_fit_assumptions() -> dict:
     return {
-        "thresholds": {
-            "min_beds": 3,
+        "hard_gates": {
+            "require_quality": True,
+            "require_str_supported_neighborhood": True,
+            "require_price_range": True,
+            "require_beds_baths": True,
+            "require_location": True,
+            "require_geo_cap_zip": True,
+            "min_beds": 2,
             "min_full_baths": 2,
             "min_list_price": 100000,
             "max_list_price": 3000000,
         },
-        "requirements": {
-            "require_str_supported_neighborhood": True,
-            "require_pool": True,
-            "exclude_unknown_private_pool": True,
-        },
         "location": {
             "enabled": True,
             "preferred_cities": ["Palm Springs", "Indio", "Bermuda Dunes"],
+            "scope_zip_candidates": ["92262"],
         },
-        "scoring_weights": {
+        "geography": {
+            "enabled": True,
+            "require_under_cap_zip": True,
+            "cap_percentage_max": 0.20,
+            "neighborhood_cap_workbook": "examples/zips/palm_springs_neighborhood_cap_by_zip.xlsx",
+            "zip_codes_column": "zip_codes",
+            "primary_zip_column": "primary_zip",
+            "percentage_column": "current_neighborhood_percentage",
+            "fail_open_if_missing_cap_data": True,
+        },
+        "ranking_weights": {
             "quality": 30,
             "str_support": 25,
-            "pool": 20,
             "beds_baths": 15,
             "price_range": 5,
             "location": 5,
+            "geo_cap_zip": 10,
+            "pool_signal": 20,
+        },
+        "shortlist": {
+            "enabled": True,
+            "target_pass_rate_min": 0.10,
+            "target_pass_rate_max": 0.20,
+            "target_pass_rate_target": 0.15,
+            "ranking_metric": "coc_med",
+            "ranking_direction": "desc",
+            "coc_assumptions_path": "examples/data/coc_assumptions.json",
         },
     }
 
@@ -124,7 +146,7 @@ def test_combined_to_str_fit_to_coc_pipeline():
                 "beds": 3,
                 "full_baths": 2,
                 "sqft": 1800,
-                "str_nbhd_under_cap_current": 1,
+                "str_nbhd_under_cap_current": 0,
                 "is_private_pool": False,
                 "is_private_pool_known": True,
                 "property_url": "https://example.com/fail",
