@@ -191,8 +191,15 @@ def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
                     ]
                 ),
                 "list_price": _safe_float(row.get("list_price")),
+                "city": _safe_str(row.get("city")),
+                "zip_code": _safe_str(row.get("zip_code")),
+                "scenario_tier": _safe_str(row.get("scenario_tier")),
+                "coc_low": _safe_float(row.get("coc_low")),
                 "coc_med": _safe_float(row.get("coc_med")),
+                "coc_high": _safe_float(row.get("coc_high")),
                 "annual_cash_flow_med": _safe_float(row.get("annual_cash_flow_med")),
+                "annual_debt_service": _safe_float(row.get("annual_debt_service")),
+                "total_cash_cost_to_buy": _safe_float(row.get("total_cash_cost_to_buy")),
                 "str_fit_score": _safe_float(row.get("str_fit_score")),
                 "str_fit_pass": _safe_bool(row.get("str_fit_pass")),
                 "property_url": _safe_str(row.get("property_url")),
@@ -218,14 +225,28 @@ def build_dashboard_payload(scored_df: pd.DataFrame, *, top_n: int = 5, homes_li
     fit = fit.sort_values(
         by=["coc_med", "str_fit_score", "property_id"], ascending=[False, False, True], kind="mergesort"
     )
+    if "scenario_tier" in fit.columns:
+        luxury = fit[fit["scenario_tier"].astype(str) == "palm_springs_luxury"].copy()
+    else:
+        luxury = fit.iloc[0:0].copy()
+    luxury = luxury.sort_values(
+        by=["coc_med", "str_fit_score", "property_id"], ascending=[False, False, True], kind="mergesort"
+    )
 
     top_fit = _top_rows(fit, top_n)
+    top_luxury = _top_rows(luxury, top_n)
     homes_fit = [_row_to_home_payload(row) for _, row in fit.head(homes_limit).iterrows()]
 
     return {
         "total_ingested": int(len(scored)),
         "total_str_fit_passed": int(len(fit)),
         "top_properties": top_fit,
+        "top_properties_luxury": top_luxury,
+        "total_luxury_candidates": int(len(luxury)),
+        "luxury_widget_note": (
+            "Luxury = scenario_tier = palm_springs_luxury from COC routing assumptions. "
+            "Ranked by base COC among luxury-tier STR-fit listings."
+        ),
         "homes": homes_fit,
         "total_houses_on_sale": int(len(scored)),
         "str_filter_snapshot": [
@@ -265,14 +286,16 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     .hero {{ grid-column: span 4; }}
     .hero h2 {{ margin: 0 0 8px; font-size: 14px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }}
     .hero .big {{ font-size: 42px; font-weight: 800; color: var(--accent); line-height: 1; }}
-    .tablecard {{ grid-column: span 8; }}
+    .assumptions-card {{ grid-column: span 12; }}
+    .tablecard-main {{ grid-column: span 12; }}
+    .tablecard-lux {{ grid-column: span 12; }}
     .title {{ margin: 0 0 14px; font-size: 20px; font-weight: 700; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th, td {{ border-bottom: 1px solid var(--line); padding: 10px 8px; text-align: left; vertical-align: top; }}
     th {{ color: var(--muted); font-weight: 700; }}
     a.link {{ color: #1d4ed8; text-decoration: none; font-weight: 600; }}
     a.link:hover {{ text-decoration: underline; }}
-    .snapshot {{ margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.5; }}
+    .snapshot {{ color: var(--muted); font-size: 13px; line-height: 1.5; }}
     .snapshot ul {{ margin: 8px 0 0; padding-left: 18px; }}
     .insight {{ font-size: 12px; color: #334155; line-height: 1.4; }}
     .breakdown {{ grid-column: span 12; }}
@@ -289,7 +312,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     .reasonbox {{ border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-top: 10px; font-size: 12px; color: var(--muted); background: #fcfdff; }}
     @media (max-width: 900px) {{
       .hero {{ grid-column: span 6; }}
-      .tablecard, .breakdown {{ grid-column: span 12; }}
+      .tablecard-main, .tablecard-lux, .breakdown {{ grid-column: span 12; }}
       .metrics {{ grid-template-columns: repeat(2, 1fr); }}
       .controls {{ grid-template-columns: 1fr; }}
     }}
@@ -308,18 +331,31 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         <div id=\"total-fit\" class=\"big\">0</div>
         <div class=\"sub\">Rows meeting STR suitability rules.</div>
       </div>
-      <div class=\"card tablecard\">
-        <h3 class=\"title\">Top 5 STR-Passing Properties by COC Return</h3>
-        <table>
-          <thead>
-            <tr><th>Property</th><th>List Price</th><th>COC (Med)</th><th>Annual Cash Flow (Med)</th><th>AI Insights</th></tr>
-          </thead>
-          <tbody id=\"top5-body\"></tbody>
-        </table>
+      <div class=\"card assumptions-card\">
         <div class=\"snapshot\">
           <strong>STR Filter Snapshot</strong>
           <ul id=\"filter-snapshot\"></ul>
         </div>
+      </div>
+      <div class=\"card tablecard-lux\">
+        <h3 class=\"title\">Luxury STR Opportunities</h3>
+        <div class=\"sub\" id=\"luxury-note\"></div>
+        <table>
+          <thead>
+            <tr><th>Property</th><th>City/ZIP</th><th>Scenario Tier</th><th>List Price</th><th>COC (Low/Med/High)</th><th>Annual Cash Flow (Med)</th><th>Annual Debt Service</th><th>Total Cash Cost</th><th>STR Fit Score</th><th>AI Insights</th></tr>
+          </thead>
+          <tbody id=\"luxury5-body\"></tbody>
+        </table>
+        <div id=\"luxury-empty\" class=\"sub\" style=\"display:none;\"></div>
+      </div>
+      <div class=\"card tablecard-main\">
+        <h3 class=\"title\">Top 5 STR-Passing Properties by COC Return</h3>
+        <table>
+          <thead>
+            <tr><th>Property</th><th>City/ZIP</th><th>Scenario Tier</th><th>List Price</th><th>COC (Low/Med/High)</th><th>Annual Cash Flow (Med)</th><th>Annual Debt Service</th><th>Total Cash Cost</th><th>STR Fit Score</th><th>AI Insights</th></tr>
+          </thead>
+          <tbody id=\"top5-body\"></tbody>
+        </table>
       </div>
       <div class=\"card breakdown\">
         <h3 class=\"title\">Home Breakdown with ADR + Occupancy Sliders (Low / Base / High)</h3>
@@ -371,9 +407,46 @@ function renderTopFive() {{
       : `<span style="color:#94a3b8">No link</span>`;
     const row = document.createElement('tr');
     row.innerHTML = `<td><strong>${{p.property_id}}</strong><br><span style="color:#64748b">${{p.address}}</span><br>${{listing}}</td>
+      <td>${{p.city || ''}}${{p.city && p.zip_code ? ', ' : ''}}${{p.zip_code || ''}}</td>
+      <td>${{p.scenario_tier || 'n/a'}}</td>
       <td>${{currency.format(p.list_price)}}</td>
-      <td>${{pct(p.coc_med)}}</td>
+      <td>${{pct(p.coc_low || 0)}} / ${{pct(p.coc_med)}} / ${{pct(p.coc_high || 0)}}</td>
       <td>${{currency.format(p.annual_cash_flow_med)}}</td>
+      <td>${{currency.format(p.annual_debt_service || 0)}}</td>
+      <td>${{currency.format(p.total_cash_cost_to_buy || 0)}}</td>
+      <td>${{(p.str_fit_score || 0).toFixed(1)}}</td>
+      <td class="insight"><div>${{p.ai_insight_potential || 'Potential: n/a'}}</div><div>${{p.ai_insight_risk || 'Risk: n/a'}}</div></td>`;
+    body.appendChild(row);
+  }});
+}}
+
+function renderLuxuryFive() {{
+  const body = document.getElementById('luxury5-body');
+  const empty = document.getElementById('luxury-empty');
+  body.innerHTML = '';
+
+  const rows = payload.top_properties_luxury || [];
+  if (!rows.length) {{
+    empty.style.display = 'block';
+    empty.textContent = 'No luxury STR-fit properties available in current dataset.';
+    return;
+  }}
+
+  empty.style.display = 'none';
+  rows.forEach((p) => {{
+    const listing = p.property_url
+      ? `<a class="link" href="${{p.property_url}}" target="_blank" rel="noopener noreferrer">View Listing</a>`
+      : `<span style="color:#94a3b8">No link</span>`;
+    const row = document.createElement('tr');
+    row.innerHTML = `<td><strong>${{p.property_id}}</strong><br><span style="color:#64748b">${{p.address}}</span><br>${{listing}}</td>
+      <td>${{p.city || ''}}${{p.city && p.zip_code ? ', ' : ''}}${{p.zip_code || ''}}</td>
+      <td>${{p.scenario_tier || 'n/a'}}</td>
+      <td>${{currency.format(p.list_price)}}</td>
+      <td>${{pct(p.coc_low || 0)}} / ${{pct(p.coc_med)}} / ${{pct(p.coc_high || 0)}}</td>
+      <td>${{currency.format(p.annual_cash_flow_med)}}</td>
+      <td>${{currency.format(p.annual_debt_service || 0)}}</td>
+      <td>${{currency.format(p.total_cash_cost_to_buy || 0)}}</td>
+      <td>${{(p.str_fit_score || 0).toFixed(1)}}</td>
       <td class="insight"><div>${{p.ai_insight_potential || 'Potential: n/a'}}</div><div>${{p.ai_insight_risk || 'Risk: n/a'}}</div></td>`;
     body.appendChild(row);
   }});
@@ -457,7 +530,9 @@ function init() {{
   const select = document.getElementById('home-select');
   select.addEventListener('change', (e) => updateForHome(Number(e.target.value)));
 
+  document.getElementById('luxury-note').textContent = payload.luxury_widget_note || '';
   renderTopFive();
+  renderLuxuryFive();
   populateHomes();
   updateForHome(0);
 }}
