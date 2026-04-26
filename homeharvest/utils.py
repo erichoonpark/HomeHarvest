@@ -46,6 +46,7 @@ ordered_properties = [
     "tax_history",
     "new_construction",
     "lot_sqft",
+    "lot_size_sqft",
     "price_per_sqft",
     "latitude",
     "longitude",
@@ -54,6 +55,7 @@ ordered_properties = [
     "fips_code",
     "stories",
     "hoa_fee",
+    "hoa_monthly_fee",
     "parking_garage",
     "agent_id",
     "agent_name",
@@ -73,6 +75,7 @@ ordered_properties = [
     "nearby_schools",
     "primary_photo",
     "alt_photos",
+    "listing_description",
     "raw_details",
     "raw_tags",
     "raw_photo_tags",
@@ -179,6 +182,10 @@ def process_result(result: Property) -> pd.DataFrame:
         prop_data["parking_garage"] = description.garage
         prop_data["stories"] = description.stories
         prop_data["text"] = description.text
+
+    prop_data["lot_size_sqft"] = prop_data.get("lot_sqft")
+    prop_data["hoa_monthly_fee"] = prop_data.get("hoa_fee")
+    prop_data["listing_description"] = prop_data.get("text")
 
     properties_df = pd.DataFrame([prop_data])
     properties_df = properties_df.reindex(columns=ordered_properties)

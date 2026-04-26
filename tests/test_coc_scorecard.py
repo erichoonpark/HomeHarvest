@@ -45,6 +45,34 @@ def _assumptions() -> dict:
             "utilities_monthly": 650,
         },
         "scenario_routing": {"luxury_price_threshold": 2_000_000},
+        "adr_engine": {
+            "base_adr_market": 430,
+            "pool_multiplier": 1.12,
+            "renovation_multiplier": 1.08,
+            "bedroom_multipliers": {"1": 0.75, "2": 0.9, "3": 1.0, "4": 1.15, "5+": 1.3},
+            "luxury_uplift_pct": 0.35,
+        },
+        "contract_policy": {
+            "annual_bookable_nights": 365,
+            "max_str_bookings_per_year": 26,
+            "avg_stay_nights_per_booking": 4,
+        },
+        "mtr": {"mtr_adr_multiplier": 0.55, "mtr_occupancy": 0.72},
+        "heloc": {
+            "enabled": False,
+            "interest_only": True,
+            "rate_annual": 0.085,
+            "draw_strategy": "down_payment_only",
+        },
+        "tax": {
+            "effective_combined_tax_rate": 0.37,
+            "analysis_year": 1,
+            "building_allocation_pct": 0.8,
+            "standard_recovery_years": 27.5,
+            "cost_seg_start_year": 2,
+            "cost_seg_bonus_pct": 0.2,
+        },
+        "ranking_metric": "coc_post_tax",
         "scenario_presets": {
             "palm_springs_normal": {
                 "low": {"adr": 340, "occupancy_rate": 0.52},
@@ -136,9 +164,29 @@ def test_coc_columns_exist_and_rank_stable():
     assert set(scored["property_id"]) == {"A", "B"}
     assert all(
         col in scored.columns
-        for col in ["monthly_debt_payment", "total_cash_cost_to_buy", "coc_low", "coc_med", "coc_high"]
+        for col in [
+            "monthly_debt_payment",
+            "total_cash_cost_to_buy",
+            "coc_low",
+            "coc_med",
+            "coc_high",
+            "adr_assumed",
+            "str_nights_capped",
+            "mtr_nights",
+            "annual_revenue_total",
+            "annual_cash_flow_pre_tax",
+            "coc_pre_tax",
+            "taxable_income",
+            "tax_impact",
+            "annual_cash_flow_post_tax",
+            "coc_post_tax",
+            "heloc_interest_annual",
+            "mortgage_interest_annual",
+            "depreciation_annual",
+            "depreciation_costseg_annual",
+        ]
     )
-    assert scored["coc_med"].iloc[0] >= scored["coc_med"].iloc[1]
+    assert scored["coc_post_tax"].iloc[0] >= scored["coc_post_tax"].iloc[1]
 
 
 def test_workbook_generation_contains_required_sheets(tmp_path: Path):
@@ -174,6 +222,39 @@ def test_workbook_generation_contains_required_sheets(tmp_path: Path):
     top = pd.read_excel(out, sheet_name="Top25_COC")
     assert "monthly_debt_payment" in top.columns
     assert "total_cash_cost_to_buy" in top.columns
+    assert "coc_pre_tax" in top.columns
+    assert "coc_post_tax" in top.columns
+
+
+def test_workbook_generation_uses_dynamic_top_sheet_name(tmp_path: Path):
+    module = _load_module()
+    assumptions = _assumptions()
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+                "str_fit_pass": True,
+            }
+        ]
+    )
+
+    scored = module.score_properties(df, assumptions)
+    out = tmp_path / "coc_scorecard_top10.xlsx"
+    module.write_scorecard(scored, assumptions, out, top_n=10)
+
+    wb = pd.ExcelFile(out)
+    assert set(["Top10_COC", "Assumptions", "All_Scored"]).issubset(set(wb.sheet_names))
 
 
 def test_load_assumptions_from_json(tmp_path: Path):
@@ -269,7 +350,7 @@ def test_score_properties_prioritizes_str_fit_rows_in_ranking():
     assert bool(scored.iloc[0]["str_fit_pass"]) is True
 
 
-def test_score_properties_keeps_manual_coownership_for_audit_but_ranks_fit_first():
+def test_score_properties_excludes_manual_coownership_addresses():
     module = _load_module()
     assumptions = _assumptions()
 
@@ -307,8 +388,49 @@ def test_score_properties_keeps_manual_coownership_for_audit_but_ranks_fit_first
     )
 
     scored = module.score_properties(df, assumptions)
-    assert set(scored["property_id"]) == {"A", "1086968872"}
+    assert set(scored["property_id"]) == {"A"}
     assert scored.iloc[0]["property_id"] == "A"
+
+
+def test_score_properties_excludes_stevens_rd_manual_exclusion():
+    module = _load_module()
+    assumptions = _assumptions()
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "STEVENS",
+                "status": "FOR_SALE",
+                "street": "594 W Stevens Rd",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 1_250_000,
+                "beds": 4,
+                "full_baths": 3,
+                "sqft": 2600,
+                "property_url": "https://example.com/stevens",
+                "str_fit_pass": True,
+            },
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+                "str_fit_pass": True,
+            },
+        ]
+    )
+
+    scored = module.score_properties(df, assumptions)
+    assert set(scored["property_id"]) == {"A"}
 
 
 def test_score_properties_requires_str_fit_by_default():
@@ -363,3 +485,143 @@ def test_score_properties_run_all_override():
 
     scored = module.score_properties(df, assumptions, require_str_fit=False)
     assert set(scored["property_id"]) == {"A"}
+
+
+def test_palm_springs_26_booking_cap_and_mtr_fallback():
+    module = _load_module()
+    assumptions = _assumptions()
+    assumptions["contract_policy"]["avg_stay_nights_per_booking"] = 3
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+                "str_fit_pass": True,
+            }
+        ]
+    )
+
+    scored = module.score_properties(df, assumptions)
+    row = scored.iloc[0]
+    assert float(row["str_nights_capped"]) == 78.0
+    assert float(row["mtr_nights"]) > 0
+    assert float(row["mtr_revenue"]) > 0
+
+
+def test_adr_multipliers_and_luxury_uplift_raise_assumed_adr():
+    module = _load_module()
+    assumptions = _assumptions()
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "NORMAL",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "has_pool_inferred": False,
+                "property_url": "https://example.com/normal",
+                "str_fit_pass": True,
+            },
+            {
+                "property_id": "LUX",
+                "status": "FOR_SALE",
+                "street": "200 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 2500000,
+                "beds": 4,
+                "full_baths": 3,
+                "sqft": 3200,
+                "has_pool_inferred": True,
+                "description": "Fully renovated designer home with resort pool",
+                "property_url": "https://example.com/lux",
+                "str_fit_pass": True,
+            },
+        ]
+    )
+
+    scored = module.score_properties(df, assumptions)
+    normal_adr = float(scored[scored["property_id"] == "NORMAL"]["adr_assumed"].iloc[0])
+    lux_adr = float(scored[scored["property_id"] == "LUX"]["adr_assumed"].iloc[0])
+    assert lux_adr > normal_adr
+
+
+def test_heloc_interest_and_post_tax_columns_present_when_enabled():
+    module = _load_module()
+    assumptions = _assumptions()
+    assumptions["heloc"]["enabled"] = True
+    assumptions["heloc"]["draw_strategy"] = "down_payment_and_closing"
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+                "str_fit_pass": True,
+            }
+        ]
+    )
+
+    scored = module.score_properties(df, assumptions)
+    row = scored.iloc[0]
+    assert float(row["heloc_interest_annual"]) > 0
+    assert "coc_pre_tax" in scored.columns
+    assert "coc_post_tax" in scored.columns
+
+
+def test_year_two_costseg_increases_depreciation():
+    module = _load_module()
+    assumptions_year1 = _assumptions()
+    assumptions_year2 = _assumptions()
+    assumptions_year2["tax"]["analysis_year"] = 2
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+                "str_fit_pass": True,
+            }
+        ]
+    )
+
+    row1 = module.score_properties(df, assumptions_year1).iloc[0]
+    row2 = module.score_properties(df, assumptions_year2).iloc[0]
+    assert float(row1["depreciation_costseg_annual"]) == 0.0
+    assert float(row2["depreciation_costseg_annual"]) > 0.0
