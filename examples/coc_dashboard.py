@@ -913,10 +913,15 @@ function updateForHome(idx) {{
   const recompute = () => {{
     const adr = Number(adrSlider.value);
     const occ = Number(occSlider.value);
-    const monthlyRevenue = adr * 30 * occ;
-    const annualRevenue = monthlyRevenue * 12;
-    const annualOperating = home.annual_fixed_operating_costs + (annualRevenue * home.operating_variable_ratio);
-    const annualCashFlow = annualRevenue - annualOperating - home.annual_debt_service;
+    const adrRange = Math.max(1, home.adr_high - home.adr_low);
+    const occRange = Math.max(0.0001, home.occ_high - home.occ_low);
+    const adrWeight = Math.min(1, Math.max(0, (adr - home.adr_low) / adrRange));
+    const occWeight = Math.min(1, Math.max(0, (occ - home.occ_low) / occRange));
+    const scenarioMix = (adrWeight + occWeight) / 2;
+
+    const annualCashFlowLow = Number(home.annual_cash_flow_low || 0);
+    const annualCashFlowHigh = Number(home.annual_cash_flow_high || home.annual_cash_flow_med || 0);
+    const annualCashFlow = annualCashFlowLow + ((annualCashFlowHigh - annualCashFlowLow) * scenarioMix);
     const coc = home.total_cash_cost_to_buy > 0 ? (annualCashFlow / home.total_cash_cost_to_buy) : 0;
 
     document.getElementById('adr-val').textContent = currency.format(adr);

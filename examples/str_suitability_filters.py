@@ -656,9 +656,10 @@ def _score_row(
 
     # Balanced pool gate:
     # - Explicitly confirmed private pool always passes.
-    # - Unknown private-pool status can pass only when we have strong inferred
-    #   pool evidence from listing text/fields (pool_signal_score >= 0.5).
-    private_pool_pass = private_pool_verified
+    # - Unknown private-pool status can pass when inferred pool evidence is strong.
+    private_pool_pass = bool(
+        private_pool_verified or (has_private_pool and (not is_private_pool_known) and pool_signal_score >= 0.5)
+    )
 
     checks = {
         "quality": quality_pass if hard_gates.get("require_quality", True) else True,

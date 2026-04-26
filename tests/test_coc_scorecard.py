@@ -226,6 +226,37 @@ def test_workbook_generation_contains_required_sheets(tmp_path: Path):
     assert "coc_post_tax" in top.columns
 
 
+def test_workbook_generation_uses_dynamic_top_sheet_name(tmp_path: Path):
+    module = _load_module()
+    assumptions = _assumptions()
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "A",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "property_url": "https://example.com/a",
+                "str_fit_pass": True,
+            }
+        ]
+    )
+
+    scored = module.score_properties(df, assumptions)
+    out = tmp_path / "coc_scorecard_top10.xlsx"
+    module.write_scorecard(scored, assumptions, out, top_n=10)
+
+    wb = pd.ExcelFile(out)
+    assert set(["Top10_COC", "Assumptions", "All_Scored"]).issubset(set(wb.sheet_names))
+
+
 def test_load_assumptions_from_json(tmp_path: Path):
     module = _load_module()
     path = tmp_path / "assumptions.json"

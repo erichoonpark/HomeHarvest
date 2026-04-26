@@ -805,9 +805,10 @@ def write_scorecard(scored_df: pd.DataFrame, assumptions: dict[str, Any], output
     else:
         top_df = scored_df.head(top_n).copy()
     assumptions_df = assumptions_to_df(assumptions)
+    top_sheet_name = f"Top{max(1, int(top_n))}_COC"[:31]
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        top_df.to_excel(writer, index=False, sheet_name="Top25_COC")
+        top_df.to_excel(writer, index=False, sheet_name=top_sheet_name)
         assumptions_df.to_excel(writer, index=False, sheet_name="Assumptions")
         scored_df.to_excel(writer, index=False, sheet_name="All_Scored")
 

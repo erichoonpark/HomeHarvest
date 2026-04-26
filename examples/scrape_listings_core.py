@@ -60,19 +60,6 @@ POOL_PRIVATE_KEYWORDS = ("private", "pool private: yes", "private pool")
 POOL_COMMUNITY_KEYWORDS = ("community", "shared", "hoa pool", "community pool", "community swimming pool")
 POOL_GENERIC_KEYWORDS = ("pool", "swimming_pool", "swimming pool", "spa", "hot tub", "above_ground_pool")
 POOL_DETAIL_CATEGORY_KEYWORDS = ("pool", "spa", "exterior")
-REQUIRED_BASELINE_FIELDS = (
-    "list_price",
-    "sqft",
-    "street",
-    "property_url",
-    "lot_sqft",
-    "style",
-    "pool_available",
-    "is_private_pool",
-    "is_private_pool_known",
-    "private_pool_verified",
-    "price_per_sqft",
-)
 ADDRESS_EXCLUDE_KEYWORDS = (
     "mobile",
     "manufactured",
@@ -781,6 +768,24 @@ def summarize_incremental_batch(
     }
 
 
+def _values_equal(lhs: object, rhs: object) -> bool:
+    if lhs is None and rhs is None:
+        return True
+    lhs_missing = pd.isna(lhs) if not isinstance(lhs, (list, dict, tuple, set)) else False
+    rhs_missing = pd.isna(rhs) if not isinstance(rhs, (list, dict, tuple, set)) else False
+    if lhs_missing and rhs_missing:
+        return True
+    return lhs == rhs
+
+
+def _row_needs_refresh(existing_row: pd.Series, incoming: dict[str, object]) -> bool:
+    for col, incoming_value in incoming.items():
+        existing_value = existing_row.get(col, pd.NA)
+        if not _values_equal(existing_value, incoming_value):
+            return True
+    return False
+
+
 def apply_incremental_upserts(
     existing_df: pd.DataFrame,
     deduped_batch_df: pd.DataFrame,
@@ -794,7 +799,7 @@ def apply_incremental_upserts(
 
     - New property_id -> append as new row.
     - Existing property_id with changed status -> update existing row in place.
-    - Existing property_id with same status -> leave unchanged.
+    - Existing property_id with same status -> refresh row if fields changed.
     """
     combined_df = existing_df.copy()
 
@@ -839,8 +844,12 @@ def apply_incremental_upserts(
         previous_status = (
             _normalize_status(combined_df.at[existing_idx, "status"]) if "status" in combined_df.columns else ""
         )
-        if incoming_status and incoming_status != previous_status:
-            # Refresh existing row with incoming listing fields.
+        status_changed = bool(incoming_status and incoming_status != previous_status)
+        needs_refresh = _row_needs_refresh(combined_df.loc[existing_idx], incoming_dict)
+
+        if status_changed or needs_refresh:
+            # Refresh existing row with incoming listing fields when status changed
+            # or when other listing attributes changed (e.g., list_price updates).
             for col, value in incoming_dict.items():
                 combined_df.at[existing_idx, col] = value
 
@@ -849,10 +858,15 @@ def apply_incremental_upserts(
             combined_df.at[existing_idx, "batch_window_end"] = batch_window_end
             combined_df.at[existing_idx, "ingest_mode"] = "incremental"
             combined_df.at[existing_idx, "is_new_in_batch"] = False
-            combined_df.at[existing_idx, "is_status_updated_in_batch"] = True
-            combined_df.at[existing_idx, "status_previous"] = previous_status if previous_status else pd.NA
-            combined_df.at[existing_idx, "status_updated_to"] = incoming_status
-            status_updated_rows += 1
+            combined_df.at[existing_idx, "is_status_updated_in_batch"] = status_changed
+            combined_df.at[existing_idx, "status_previous"] = (
+                previous_status if status_changed and previous_status else pd.NA
+            )
+            combined_df.at[existing_idx, "status_updated_to"] = (
+                incoming_status if status_changed and incoming_status else pd.NA
+            )
+            if status_changed:
+                status_updated_rows += 1
         else:
             unchanged_overlap_rows += 1
 
