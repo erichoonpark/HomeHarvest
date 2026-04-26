@@ -70,6 +70,7 @@ REQUIRED_BASELINE_FIELDS = (
     "pool_available",
     "is_private_pool",
     "is_private_pool_known",
+    "private_pool_verified",
     "price_per_sqft",
 )
 ADDRESS_EXCLUDE_KEYWORDS = (
@@ -317,6 +318,12 @@ def _extract_pool_mapping(row: pd.Series) -> dict[str, object]:
     evidence: list[str] = []
     sources: list[str] = []
 
+    # Track where each signal was observed so we can apply an evidence ladder.
+    private_sources: set[str] = set()
+    community_sources: set[str] = set()
+    explicit_yes_sources: set[str] = set()
+    explicit_no_sources: set[str] = set()
+
     # Layer 1: details[] (highest trust)
     details_rows = _json_list(row.get("raw_details"))
     for detail in details_rows:
@@ -335,14 +342,32 @@ def _extract_pool_mapping(row: pd.Series) -> dict[str, object]:
             iter_values = []
         for value in iter_values:
             text = str(value)
+            before = signals.copy()
             _update_pool_signals_from_text(text, signals, evidence)
             sources.append("details")
+            if signals["private"] and not before["private"]:
+                private_sources.add("details")
+            if signals["community"] and not before["community"]:
+                community_sources.add("details")
+            if signals["explicit_private_yes"] and not before["explicit_private_yes"]:
+                explicit_yes_sources.add("details")
+            if signals["explicit_private_no"] and not before["explicit_private_no"]:
+                explicit_no_sources.add("details")
 
     # Layer 2: tags[]
     for tag in _json_list(row.get("raw_tags")):
         text = str(tag).replace("_", " ")
+        before = signals.copy()
         _update_pool_signals_from_text(text, signals, evidence)
         sources.append("tags")
+        if signals["private"] and not before["private"]:
+            private_sources.add("tags")
+        if signals["community"] and not before["community"]:
+            community_sources.add("tags")
+        if signals["explicit_private_yes"] and not before["explicit_private_yes"]:
+            explicit_yes_sources.add("tags")
+        if signals["explicit_private_no"] and not before["explicit_private_no"]:
+            explicit_no_sources.add("tags")
 
     # Layer 3: photo tags + fallback columns
     photo_tags = _json_list(row.get("raw_photo_tags"))
@@ -351,8 +376,17 @@ def _extract_pool_mapping(row: pd.Series) -> dict[str, object]:
             continue
         for label in item.get("labels", []) or []:
             text = str(label).replace("_", " ")
+            before = signals.copy()
             _update_pool_signals_from_text(text, signals, evidence)
             sources.append("photo_tags")
+            if signals["private"] and not before["private"]:
+                private_sources.add("photo_tags")
+            if signals["community"] and not before["community"]:
+                community_sources.add("photo_tags")
+            if signals["explicit_private_yes"] and not before["explicit_private_yes"]:
+                explicit_yes_sources.add("photo_tags")
+            if signals["explicit_private_no"] and not before["explicit_private_no"]:
+                explicit_no_sources.add("photo_tags")
 
     for col in POOL_DETECTION_COLUMNS:
         if col not in row.index:
@@ -366,31 +400,60 @@ def _extract_pool_mapping(row: pd.Series) -> dict[str, object]:
         elif bool_value is False:
             sources.append(col)
         else:
+            before = signals.copy()
             _update_pool_signals_from_text(str(raw), signals, evidence)
             if str(raw).strip():
                 sources.append(col)
+            if signals["private"] and not before["private"]:
+                private_sources.add(col)
+            if signals["community"] and not before["community"]:
+                community_sources.add(col)
+            if signals["explicit_private_yes"] and not before["explicit_private_yes"]:
+                explicit_yes_sources.add(col)
+            if signals["explicit_private_no"] and not before["explicit_private_no"]:
+                explicit_no_sources.add(col)
 
-    if signals["explicit_private_yes"]:
+    structured_sources = {"details", "tags", "photo_tags"}
+    private_structured = bool(private_sources & structured_sources)
+    community_structured = bool(community_sources & structured_sources)
+    explicit_yes = signals["explicit_private_yes"]
+    explicit_no = signals["explicit_private_no"]
+    has_conflict = bool((explicit_yes and explicit_no) or (explicit_no and signals["private"]))
+    community_only = bool(signals["community"] and not signals["private"] and not explicit_yes)
+    inferred_private_high = bool(private_structured and not community_structured and not explicit_no)
+
+    if has_conflict:
+        is_private_pool = False
+        is_private_pool_known = True
+        pool_type = "unknown"
+        confidence = "high"
+    elif explicit_yes:
         is_private_pool = True
         is_private_pool_known = True
         pool_type = "private" if not signals["community"] else "both"
         confidence = "high"
-    elif signals["explicit_private_no"]:
+    elif explicit_no:
         is_private_pool = False
         is_private_pool_known = True
         pool_type = "community" if signals["community"] else "unknown"
         confidence = "high"
-    elif signals["private"] and signals["community"]:
+    elif inferred_private_high:
         is_private_pool = True
+        is_private_pool_known = True
+        pool_type = "private"
+        confidence = "high"
+    elif signals["private"] and signals["community"]:
+        is_private_pool = False
         is_private_pool_known = True
         pool_type = "both"
         confidence = "medium"
     elif signals["private"]:
-        is_private_pool = True
-        is_private_pool_known = True
+        # Private-only in fallback free text is not strong enough to verify.
+        is_private_pool = False
+        is_private_pool_known = False
         pool_type = "private"
         confidence = "medium"
-    elif signals["community"]:
+    elif community_only:
         is_private_pool = False
         is_private_pool_known = True
         pool_type = "community"
@@ -411,12 +474,16 @@ def _extract_pool_mapping(row: pd.Series) -> dict[str, object]:
     )
     unique_sources = sorted(set(sources))
     evidence_preview = "; ".join(dict.fromkeys(evidence).keys())[:1000] if evidence else ""
+    private_pool_verified = bool(is_private_pool_known and is_private_pool and not has_conflict)
 
     return {
         "pool_available": pool_available,
         "pool_type": pool_type,
         "is_private_pool": is_private_pool,
         "is_private_pool_known": is_private_pool_known,
+        "private_pool_verified": private_pool_verified,
+        "pool_conflict": has_conflict,
+        "pool_community_only": community_only,
         "pool_confidence": confidence,
         "pool_signal_sources": ",".join(unique_sources) if unique_sources else "none",
         "pool_evidence": evidence_preview if evidence_preview else pd.NA,
@@ -433,6 +500,9 @@ def enrich_and_enforce_required_baseline_fields(df: pd.DataFrame, *, zip_code: s
     enriched["pool_type"] = pool_mapping.map(lambda x: x["pool_type"])
     enriched["is_private_pool"] = pool_mapping.map(lambda x: bool(x["is_private_pool"]))
     enriched["is_private_pool_known"] = pool_mapping.map(lambda x: bool(x["is_private_pool_known"]))
+    enriched["private_pool_verified"] = pool_mapping.map(lambda x: bool(x["private_pool_verified"]))
+    enriched["pool_conflict"] = pool_mapping.map(lambda x: bool(x["pool_conflict"]))
+    enriched["pool_community_only"] = pool_mapping.map(lambda x: bool(x["pool_community_only"]))
     enriched["pool_confidence"] = pool_mapping.map(lambda x: x["pool_confidence"])
     enriched["pool_signal_sources"] = pool_mapping.map(lambda x: x["pool_signal_sources"])
     enriched["pool_evidence"] = pool_mapping.map(lambda x: x["pool_evidence"])
@@ -466,6 +536,9 @@ def enrich_and_enforce_required_baseline_fields(df: pd.DataFrame, *, zip_code: s
     pool_detected = int(kept["pool_available"].sum()) if not kept.empty else 0
     private_known = int(kept["is_private_pool_known"].sum()) if not kept.empty else 0
     private_true = int(kept["is_private_pool"].sum()) if not kept.empty else 0
+    private_verified = int(kept["private_pool_verified"].sum()) if not kept.empty else 0
+    community_only = int(kept["pool_community_only"].sum()) if not kept.empty else 0
+    pool_conflict = int(kept["pool_conflict"].sum()) if not kept.empty else 0
     if dropped > 0:
         print(
             f"[baseline-required] ZIP {zip_code} {listing_type}: dropped {dropped}/{len(enriched)} rows "
@@ -474,7 +547,8 @@ def enrich_and_enforce_required_baseline_fields(df: pd.DataFrame, *, zip_code: s
     print(
         f"[baseline-required] ZIP {zip_code} {listing_type}: kept {len(kept)} rows; "
         f"pool_detected={pool_detected}; private_pool_true={private_true}; "
-        f"private_pool_unknown={len(kept) - private_known}."
+        f"private_pool_unknown={len(kept) - private_known}; private_pool_verified={private_verified}; "
+        f"community_only={community_only}; conflict={pool_conflict}."
     )
     if (kept.get("pool_signal_sources", pd.Series(dtype="object")) == "none").any():
         print(

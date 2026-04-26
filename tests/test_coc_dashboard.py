@@ -38,6 +38,7 @@ def _sample_scored_df() -> pd.DataFrame:
                 "monthly_debt_payment": 5000,
                 "annual_debt_service": 60000,
                 "total_cash_cost_to_buy": 220000,
+                "dscr": 1.21,
                 "annual_fixed_operating_costs": 22000,
                 "adr_low": 300,
                 "adr_med": 420,
@@ -53,10 +54,20 @@ def _sample_scored_df() -> pd.DataFrame:
                 "coc_low": -0.009,
                 "coc_med": 0.036,
                 "coc_high": 0.109,
+                "coc_pre_tax": 0.05,
+                "coc_post_tax": 0.04,
                 "str_fit_pass": True,
                 "str_fit_score": 90,
                 "str_fit_reasons_pass": "STR-supported neighborhood; Pool requirement met",
                 "str_fit_reasons_fail": "",
+                "pool_enrichment_needed": False,
+                "pool_enrichment_attempted": False,
+                "pool_enrichment_result": "not_needed",
+                "private_pool_verified": True,
+                "is_palm_springs_priority_candidate": True,
+                "priority_score": 0.82,
+                "priority_rank": 1,
+                "priority_reason_summary": "Ranked high for attractive price per sqft, strong lot-size utility.",
             },
             {
                 "property_id": "B",
@@ -86,10 +97,20 @@ def _sample_scored_df() -> pd.DataFrame:
                 "coc_low": -0.028,
                 "coc_med": 0.036,
                 "coc_high": 0.10,
+                "coc_pre_tax": 0.03,
+                "coc_post_tax": 0.02,
                 "str_fit_pass": False,
                 "str_fit_score": 70,
                 "str_fit_reasons_pass": "Beds/Baths meets 3+/2+",
-                "str_fit_reasons_fail": "Pool requirement met",
+                "str_fit_reasons_fail": "Private pool unknown",
+                "pool_enrichment_needed": True,
+                "pool_enrichment_attempted": True,
+                "pool_enrichment_result": "still_unknown",
+                "private_pool_verified": False,
+                "pool_signal_confidence": "low",
+                "pool_signal_sources": "none",
+                "pool_evidence": "n/a",
+                "is_palm_springs_priority_candidate": False,
             },
         ]
     )
@@ -106,20 +127,36 @@ def test_build_dashboard_payload_has_widgets_data():
     assert "total_cash_cost_to_buy" in payload["homes"][0]
     assert "adr_low" in payload["homes"][0]
     assert "property_url" in payload["top_properties"][0]
-    assert "city" in payload["top_properties"][0]
-    assert "zip_code" in payload["top_properties"][0]
-    assert "scenario_tier" in payload["top_properties"][0]
-    assert "coc_low" in payload["top_properties"][0]
-    assert "coc_high" in payload["top_properties"][0]
-    assert "annual_debt_service" in payload["top_properties"][0]
+    assert "beds" in payload["top_properties"][0]
+    assert "full_baths" in payload["top_properties"][0]
+    assert "sqft" in payload["top_properties"][0]
+    assert "lot_sqft" in payload["top_properties"][0]
+    assert "adr_med" in payload["top_properties"][0]
+    assert "price_per_sqft" in payload["top_properties"][0]
+    assert "coc_med" in payload["top_properties"][0]
+    assert "coc_pre_tax" in payload["top_properties"][0]
+    assert "coc_post_tax" in payload["top_properties"][0]
+    assert "monthly_debt_payment" in payload["top_properties"][0]
     assert "total_cash_cost_to_buy" in payload["top_properties"][0]
+    assert "dscr" in payload["top_properties"][0]
     assert "ai_insight_potential" in payload["top_properties"][0]
     assert "ai_insight_risk" in payload["top_properties"][0]
     assert "ai_insight_potential" in payload["homes"][0]
     assert "ai_insight_risk" in payload["homes"][0]
     assert "top_properties_luxury" in payload
+    assert "top_properties_palm_springs_priority" in payload
+    assert "total_palm_springs_priority_candidates" in payload
+    assert "total_palm_springs_strict_pass" in payload
+    assert "priority_ranking_note" in payload
     assert "total_luxury_candidates" in payload
     assert "luxury_widget_note" in payload
+    assert "top_properties_luxury_value_budget" in payload
+    assert "pool_verification_watchlist" in payload
+    assert "total_pool_unknown_candidates" in payload
+    assert "total_pool_verified_after_enrichment" in payload
+    assert "total_luxury_value_budget_candidates" in payload
+    assert "luxury_value_budget_cap" in payload
+    assert "luxury_value_note" in payload
 
 
 def test_render_dashboard_html_contains_expected_sections():
@@ -129,25 +166,146 @@ def test_render_dashboard_html_contains_expected_sections():
 
     assert "Total Ingested" in html
     assert "STR Fit Passed" in html
-    assert "Top 5 STR-Passing Properties by COC Return" in html
-    assert "COC (Low/Med/High)" in html
-    assert "Annual Debt Service" in html
-    assert "Total Cash Cost" in html
-    assert "City/ZIP" in html
-    assert "Scenario Tier" in html
+    assert "Top STR-Passing Properties by COC Return" in html
+    assert "Property ID" in html
+    assert "Address" in html
+    assert "Price / Sq Ft" in html
+    assert "Sq Ft" in html
+    assert "Lot Size" in html
+    assert "Bedrooms" in html
+    assert "Bathrooms" in html
+    assert "Assumed ADR Rate" in html
+    assert "STR Potential" in html
+    assert "Investment Metrics" in html
+    assert "Pre-Tax COC" in html
+    assert "Post-Tax COC" in html
+    assert "Monthly Payment" in html
+    assert "Cash Needed" in html
+    assert "Annual Cash Flow (Med)" in html
+    assert "DSCR" in html
+    assert "<th>Scenario Tier</th>" not in html
     assert "View Listing" in html
     assert 'target="_blank"' in html
     assert "Potential:" in html
     assert "Risk:" in html
     assert "STR Filter Snapshot" in html
+    assert "Luxury STR Value Under $1.5M" in html
+    assert "Palm Springs Priority List" in html
+    assert "Pool Verification Watchlist" in html
     assert "Luxury STR Opportunities" in html
     assert "palm_springs_luxury" in html
-    assert html.index("STR Filter Snapshot") < html.index("Luxury STR Opportunities")
-    assert html.index("Luxury STR Opportunities") < html.index("Top 5 STR-Passing Properties by COC Return")
+    assert html.index("STR Filter Snapshot") < html.index("Pool Verification Watchlist")
+    assert html.index("Palm Springs Priority List") < html.index("Pool Verification Watchlist")
+    assert html.index("Pool Verification Watchlist") < html.index("Luxury STR Opportunities")
+    assert html.index("Luxury STR Value Under $1.5M") < html.index("Luxury STR Opportunities")
+    assert html.index("Luxury STR Opportunities") < html.index("Top STR-Passing Properties by COC Return")
     assert ".tablecard-main { grid-column: span 12; }" in html
     assert ".tablecard-lux { grid-column: span 12; }" in html
     assert "Home Breakdown with ADR + Occupancy Sliders" in html
     assert "payload" in html
+
+
+def test_palm_springs_priority_widget_orders_by_rank_and_score():
+    module = _load_module()
+    rows = [
+        {
+            "property_id": "PS3",
+            "status": "FOR_SALE",
+            "street": "3 Palm St",
+            "city": "Palm Springs",
+            "state": "CA",
+            "zip_code": "92262",
+            "list_price": 900000,
+            "sqft": 2000,
+            "property_url": "https://example.com/ps3",
+            "coc_post_tax": 0.05,
+            "str_fit_score": 90,
+            "str_fit_pass": True,
+            "is_palm_springs_priority_candidate": True,
+            "priority_rank": 2,
+            "priority_score": 0.80,
+            "priority_reason_summary": "Reason 3",
+        },
+        {
+            "property_id": "PS1",
+            "status": "FOR_SALE",
+            "street": "1 Palm St",
+            "city": "Palm Springs",
+            "state": "CA",
+            "zip_code": "92262",
+            "list_price": 850000,
+            "sqft": 1900,
+            "property_url": "https://example.com/ps1",
+            "coc_post_tax": 0.09,
+            "str_fit_score": 92,
+            "str_fit_pass": True,
+            "is_palm_springs_priority_candidate": True,
+            "priority_rank": 1,
+            "priority_score": 0.75,
+            "priority_reason_summary": "Reason 1",
+        },
+        {
+            "property_id": "NON",
+            "status": "FOR_SALE",
+            "street": "1 Other St",
+            "city": "Indio",
+            "state": "CA",
+            "zip_code": "92201",
+            "list_price": 600000,
+            "sqft": 1800,
+            "property_url": "https://example.com/non",
+            "coc_post_tax": 0.30,
+            "str_fit_score": 99,
+            "str_fit_pass": True,
+            "is_palm_springs_priority_candidate": False,
+        },
+    ]
+    payload = module.build_dashboard_payload(pd.DataFrame(rows), top_n=10, homes_limit=10)
+    priority_ids = [row["property_id"] for row in payload["top_properties_palm_springs_priority"]]
+    assert priority_ids == ["PS1", "PS3"]
+    assert payload["total_palm_springs_priority_candidates"] == 2
+
+
+def test_render_dashboard_html_dscr_fallback_na():
+    module = _load_module()
+    df = _sample_scored_df().copy()
+    if "dscr" in df.columns:
+        df = df.drop(columns=["dscr"])
+    payload = module.build_dashboard_payload(df, top_n=2, homes_limit=2)
+    html = module.render_dashboard_html(payload)
+
+    assert "DSCR" in html
+    assert "N/A" in html
+
+
+def test_default_top_n_is_10():
+    module = _load_module()
+    many_rows = []
+    for idx in range(12):
+        many_rows.append(
+            {
+                "property_id": f"P{idx}",
+                "status": "FOR_SALE",
+                "street": f"{idx} Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 500000 + idx,
+                "property_url": f"https://example.com/p{idx}",
+                "coc_med": 0.20 - (idx * 0.01),
+                "str_fit_score": 90 - idx,
+                "str_fit_pass": True,
+                "annual_cash_flow_med": 10000 + idx,
+                "beds": 3,
+                "full_baths": 2,
+                "adr_med": 450,
+                "scenario_tier": "palm_springs_normal",
+            }
+        )
+    df = pd.DataFrame(many_rows)
+
+    payload = module.build_dashboard_payload(df, homes_limit=20)
+    assert len(payload["top_properties"]) == 10
 
 
 def test_write_dashboard_html_creates_file(tmp_path: Path):
@@ -175,6 +333,7 @@ def test_top_properties_are_str_fit_only_and_deterministic_tiebreak():
                 "list_price": 500000,
                 "property_url": "https://example.com/z9",
                 "coc_med": 0.08,
+                "coc_post_tax": 0.01,
                 "str_fit_score": 95,
                 "str_fit_pass": True,
                 "annual_cash_flow_med": 10000,
@@ -189,6 +348,7 @@ def test_top_properties_are_str_fit_only_and_deterministic_tiebreak():
                 "list_price": 510000,
                 "property_url": "https://example.com/a1",
                 "coc_med": 0.08,
+                "coc_post_tax": 0.06,
                 "str_fit_score": 95,
                 "str_fit_pass": True,
                 "annual_cash_flow_med": 9000,
@@ -203,6 +363,7 @@ def test_top_properties_are_str_fit_only_and_deterministic_tiebreak():
                 "list_price": 520000,
                 "property_url": "https://example.com/b2",
                 "coc_med": 0.12,
+                "coc_post_tax": 0.03,
                 "str_fit_score": 80,
                 "str_fit_pass": True,
                 "annual_cash_flow_med": 12000,
@@ -217,6 +378,7 @@ def test_top_properties_are_str_fit_only_and_deterministic_tiebreak():
                 "list_price": 530000,
                 "property_url": "https://example.com/x0",
                 "coc_med": 0.20,
+                "coc_post_tax": 0.20,
                 "str_fit_score": 99,
                 "str_fit_pass": False,
                 "annual_cash_flow_med": 15000,
@@ -228,7 +390,7 @@ def test_top_properties_are_str_fit_only_and_deterministic_tiebreak():
     top_ids = [row["property_id"] for row in payload["top_properties"]]
 
     assert "X0" not in top_ids
-    assert top_ids == ["B2", "A1", "Z9"]
+    assert top_ids == ["A1", "B2", "Z9"]
     assert len(top_ids) <= 5
 
 
@@ -248,6 +410,7 @@ def test_luxury_widget_filters_and_orders_with_max_five():
                 "property_url": f"https://example.com/l{idx}",
                 "scenario_tier": "palm_springs_luxury",
                 "coc_med": 0.20 - (idx * 0.01),
+                "coc_post_tax": 0.10 - (idx * 0.005),
                 "str_fit_score": 90 - idx,
                 "str_fit_pass": True,
                 "annual_cash_flow_med": 10000 + idx,
@@ -265,6 +428,7 @@ def test_luxury_widget_filters_and_orders_with_max_five():
             "property_url": "https://example.com/n0",
             "scenario_tier": "palm_springs_normal",
             "coc_med": 0.50,
+            "coc_post_tax": 0.50,
             "str_fit_score": 99,
             "str_fit_pass": True,
             "annual_cash_flow_med": 20000,
@@ -282,6 +446,7 @@ def test_luxury_widget_filters_and_orders_with_max_five():
             "property_url": "https://example.com/l_fail",
             "scenario_tier": "palm_springs_luxury",
             "coc_med": 0.80,
+            "coc_post_tax": 0.80,
             "str_fit_score": 100,
             "str_fit_pass": False,
             "annual_cash_flow_med": 50000,
@@ -310,3 +475,115 @@ def test_luxury_widget_empty_state_renders():
     assert payload["total_luxury_candidates"] == 0
     assert payload["top_properties_luxury"] == []
     assert "No luxury STR-fit properties available in current dataset." in html
+
+
+def test_budget_luxury_value_widget_filters_orders_and_caps_to_30():
+    module = _load_module()
+    rows = []
+    for idx in range(35):
+        rows.append(
+            {
+                "property_id": f"B{idx:02d}",
+                "status": "FOR_SALE",
+                "street": f"{idx} Value Way",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 1_000_000 + (idx * 5_000),
+                "sqft": 2000 + idx,
+                "property_url": f"https://example.com/b{idx}",
+                "coc_pre_tax": 0.03 + (idx * 0.001),
+                "coc_post_tax": 0.05 - (idx * 0.0005),
+                "str_fit_score": 95 - idx,
+                "str_fit_pass": True,
+                "annual_cash_flow_med": 8_000 + idx,
+            }
+        )
+    rows.append(
+        {
+            "property_id": "OVER_BUDGET",
+            "status": "FOR_SALE",
+            "street": "1 Over Budget Dr",
+            "city": "Palm Springs",
+            "state": "CA",
+            "zip_code": "92262",
+            "list_price": 1_600_000,
+            "sqft": 2500,
+            "property_url": "https://example.com/over",
+            "coc_pre_tax": 0.40,
+            "coc_post_tax": 0.30,
+            "str_fit_score": 99,
+            "str_fit_pass": True,
+            "annual_cash_flow_med": 30_000,
+        }
+    )
+    rows.append(
+        {
+            "property_id": "NOT_FIT",
+            "status": "FOR_SALE",
+            "street": "2 Not Fit Dr",
+            "city": "Palm Springs",
+            "state": "CA",
+            "zip_code": "92262",
+            "list_price": 1_200_000,
+            "sqft": 2200,
+            "property_url": "https://example.com/notfit",
+            "coc_pre_tax": 0.50,
+            "coc_post_tax": 0.40,
+            "str_fit_score": 100,
+            "str_fit_pass": False,
+            "annual_cash_flow_med": 45_000,
+        }
+    )
+    df = pd.DataFrame(rows)
+
+    payload = module.build_dashboard_payload(df, top_n=10, homes_limit=20)
+    widget_rows = payload["top_properties_luxury_value_budget"]
+    widget_ids = [r["property_id"] for r in widget_rows]
+
+    assert payload["luxury_value_budget_cap"] == 1_500_000
+    assert payload["total_luxury_value_budget_candidates"] == 35
+    assert len(widget_rows) == 30
+    assert "OVER_BUDGET" not in widget_ids
+    assert "NOT_FIT" not in widget_ids
+    assert all("value_score" in r for r in widget_rows)
+    assert all("price_per_sqft" in r for r in widget_rows)
+    assert all(r["ranking_metric_used"] in {"coc_post_tax", "coc_pre_tax"} for r in widget_rows)
+
+    for prior, curr in zip(widget_rows, widget_rows[1:]):
+        if prior["value_score"] != curr["value_score"]:
+            assert prior["value_score"] > curr["value_score"]
+        elif prior["coc_post_tax"] != curr["coc_post_tax"]:
+            assert prior["coc_post_tax"] > curr["coc_post_tax"]
+        elif prior["price_per_sqft"] != curr["price_per_sqft"]:
+            assert prior["price_per_sqft"] < curr["price_per_sqft"]
+        else:
+            assert prior["property_id"] < curr["property_id"]
+
+
+def test_budget_luxury_value_widget_empty_state_renders():
+    module = _load_module()
+    df = _sample_scored_df().copy()
+    df["list_price"] = 2_000_000
+    df["str_fit_pass"] = True
+
+    payload = module.build_dashboard_payload(df, top_n=10, homes_limit=10)
+    html = module.render_dashboard_html(payload)
+
+    assert payload["top_properties_luxury_value_budget"] == []
+    assert payload["total_luxury_value_budget_candidates"] == 0
+    assert "No STR-fit luxury-value properties under $1.5M in current dataset." in html
+
+
+def test_pool_watchlist_empty_state_renders():
+    module = _load_module()
+    df = _sample_scored_df().copy()
+    df["pool_enrichment_needed"] = False
+    df["private_pool_verified"] = True
+
+    payload = module.build_dashboard_payload(df, top_n=10, homes_limit=10)
+    html = module.render_dashboard_html(payload)
+
+    assert payload["pool_verification_watchlist"] == []
+    assert payload["total_pool_unknown_candidates"] == 0
+    assert "No unresolved pool-verification candidates in current dataset." in html

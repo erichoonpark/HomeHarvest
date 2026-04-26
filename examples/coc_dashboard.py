@@ -9,13 +9,15 @@ import pandas as pd
 
 DEFAULT_INPUT_PATH = Path("examples/zips/coc_scorecard.xlsx")
 DEFAULT_OUTPUT_PATH = Path("examples/zips/coc_dashboard.html")
+BUDGET_LUXURY_MAX_PRICE = 1_500_000.0
+BUDGET_LUXURY_TOP_N = 30
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build static COC dashboard HTML from scorecard workbook")
     parser.add_argument("--input", default=str(DEFAULT_INPUT_PATH), help="Input COC scorecard workbook path")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH), help="Output dashboard HTML path")
-    parser.add_argument("--top-n", type=int, default=5, help="Top N rows to display in COC table")
+    parser.add_argument("--top-n", type=int, default=10, help="Top N rows to display in COC table")
     parser.add_argument("--homes-limit", type=int, default=100, help="Max homes loaded in interactive breakdown")
     return parser.parse_args()
 
@@ -27,6 +29,15 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _safe_optional_float(value: Any) -> float | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_str(value: Any, default: str = "") -> str:
@@ -47,7 +58,7 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
 
 
 def _ai_insights(row: pd.Series) -> dict[str, str]:
-    coc_med = _safe_float(row.get("coc_med"))
+    coc_med = _safe_float(row.get("coc_post_tax"), _safe_float(row.get("coc_med")))
     coc_low = _safe_float(row.get("coc_low"))
     annual_cash_flow_med = _safe_float(row.get("annual_cash_flow_med"))
     list_price = _safe_float(row.get("list_price"))
@@ -114,8 +125,9 @@ def load_scored_data(path: str | Path) -> pd.DataFrame:
     else:
         df = pd.read_excel(workbook)
 
-    if "coc_med" in df.columns:
-        df = df.sort_values(by=["coc_med", "property_id"], ascending=[False, True], kind="mergesort")
+    ranking_col = "coc_post_tax" if "coc_post_tax" in df.columns else "coc_med"
+    if ranking_col in df.columns:
+        df = df.sort_values(by=[ranking_col, "property_id"], ascending=[False, True], kind="mergesort")
 
     return df.reset_index(drop=True)
 
@@ -159,6 +171,8 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
         "coc_low": _safe_float(row.get("coc_low")),
         "coc_med": _safe_float(row.get("coc_med")),
         "coc_high": _safe_float(row.get("coc_high")),
+        "coc_pre_tax": _safe_float(row.get("coc_pre_tax"), _safe_float(row.get("coc_med"))),
+        "coc_post_tax": _safe_float(row.get("coc_post_tax"), _safe_float(row.get("coc_med"))),
         "annual_cash_flow_low": _safe_float(row.get("annual_cash_flow_low")),
         "annual_cash_flow_med": _safe_float(row.get("annual_cash_flow_med")),
         "annual_cash_flow_high": _safe_float(row.get("annual_cash_flow_high")),
@@ -175,6 +189,9 @@ def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
     top_rows: list[dict[str, Any]] = []
     for _, row in df.head(top_n).iterrows():
         insights = _ai_insights(row)
+        list_price = _safe_float(row.get("list_price"))
+        sqft = _safe_float(row.get("sqft"))
+        price_per_sqft = (list_price / sqft) if sqft > 0 else 0.0
         top_rows.append(
             {
                 "property_id": _safe_str(row.get("property_id")),
@@ -190,16 +207,20 @@ def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
                         if p
                     ]
                 ),
-                "list_price": _safe_float(row.get("list_price")),
-                "city": _safe_str(row.get("city")),
-                "zip_code": _safe_str(row.get("zip_code")),
-                "scenario_tier": _safe_str(row.get("scenario_tier")),
-                "coc_low": _safe_float(row.get("coc_low")),
+                "list_price": list_price,
+                "sqft": sqft,
+                "lot_sqft": _safe_float(row.get("lot_sqft")),
+                "price_per_sqft": price_per_sqft,
+                "beds": _safe_float(row.get("beds")),
+                "full_baths": _safe_float(row.get("full_baths")),
+                "adr_med": _safe_float(row.get("adr_med")),
                 "coc_med": _safe_float(row.get("coc_med")),
-                "coc_high": _safe_float(row.get("coc_high")),
+                "coc_pre_tax": _safe_float(row.get("coc_pre_tax"), _safe_float(row.get("coc_med"))),
+                "coc_post_tax": _safe_float(row.get("coc_post_tax"), _safe_float(row.get("coc_med"))),
                 "annual_cash_flow_med": _safe_float(row.get("annual_cash_flow_med")),
-                "annual_debt_service": _safe_float(row.get("annual_debt_service")),
+                "monthly_debt_payment": _safe_float(row.get("monthly_debt_payment")),
                 "total_cash_cost_to_buy": _safe_float(row.get("total_cash_cost_to_buy")),
+                "dscr": _safe_optional_float(row.get("dscr")),
                 "str_fit_score": _safe_float(row.get("str_fit_score")),
                 "str_fit_pass": _safe_bool(row.get("str_fit_pass")),
                 "property_url": _safe_str(row.get("property_url")),
@@ -210,7 +231,159 @@ def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
     return top_rows
 
 
-def build_dashboard_payload(scored_df: pd.DataFrame, *, top_n: int = 5, homes_limit: int = 100) -> dict[str, Any]:
+def _normalized_map(series: pd.Series, *, inverse: bool = False) -> dict[int, float]:
+    values = pd.to_numeric(series, errors="coerce")
+    min_val = values.min(skipna=True)
+    max_val = values.max(skipna=True)
+    if pd.isna(min_val) or pd.isna(max_val):
+        return {idx: 0.5 for idx in series.index}
+    if max_val == min_val:
+        return {idx: 0.5 for idx in series.index}
+
+    normalized: dict[int, float] = {}
+    denom = max_val - min_val
+    for idx, raw in values.items():
+        if pd.isna(raw):
+            base = 0.5
+        else:
+            base = (float(raw) - float(min_val)) / float(denom)
+        normalized[idx] = 1.0 - base if inverse else base
+    return normalized
+
+
+def _budget_luxury_value_rows(
+    df: pd.DataFrame,
+    *,
+    top_n: int,
+    max_price: float,
+    coc_weight: float,
+    ppsf_weight: float,
+) -> tuple[list[dict[str, Any]], int]:
+    if df.empty:
+        return [], 0
+
+    list_price_num = pd.to_numeric(df.get("list_price"), errors="coerce").fillna(0.0)
+    budget = df[list_price_num <= max_price].copy()
+    if budget.empty:
+        return [], 0
+
+    budget["price_per_sqft"] = budget.apply(
+        lambda r: (
+            (_safe_float(r.get("list_price")) / _safe_float(r.get("sqft"))) if _safe_float(r.get("sqft")) > 0 else 0.0
+        ),
+        axis=1,
+    )
+
+    if "coc_post_tax" in budget.columns:
+        ranking_col = "coc_post_tax"
+    elif "coc_pre_tax" in budget.columns:
+        ranking_col = "coc_pre_tax"
+    else:
+        ranking_col = "coc_med"
+
+    fallback_series = budget.get("coc_pre_tax")
+    if fallback_series is None:
+        fallback_series = budget.get("coc_med")
+    if fallback_series is None:
+        fallback_series = pd.Series(0.0, index=budget.index)
+    budget["_coc_rank"] = budget[ranking_col].fillna(fallback_series)
+
+    coc_norm = _normalized_map(budget["_coc_rank"])
+    ppsf_norm = _normalized_map(budget["price_per_sqft"], inverse=True)
+
+    budget["value_score"] = [(coc_weight * coc_norm[idx]) + (ppsf_weight * ppsf_norm[idx]) for idx in budget.index]
+    budget = budget.sort_values(
+        by=["value_score", "_coc_rank", "price_per_sqft", "property_id"],
+        ascending=[False, False, True, True],
+        kind="mergesort",
+    )
+
+    rows = _top_rows(budget, top_n)
+    for i, row_idx in enumerate(budget.head(top_n).index):
+        rows[i]["value_score"] = _safe_float(budget.loc[row_idx, "value_score"])
+        rows[i]["ranking_metric_used"] = ranking_col
+    return rows, int(len(budget))
+
+
+def _pool_watchlist_rows(df: pd.DataFrame, top_n: int = 30) -> list[dict[str, Any]]:
+    if df.empty:
+        return []
+    watch = df.copy()
+    watch["pool_enrichment_needed"] = watch.get("pool_enrichment_needed", False)
+    watch["private_pool_verified"] = watch.get("private_pool_verified", False)
+    watch = watch[
+        watch["pool_enrichment_needed"].fillna(False).astype(bool)
+        & ~watch["private_pool_verified"].fillna(False).astype(bool)
+    ].copy()
+    if watch.empty:
+        return []
+    watch = watch.sort_values(by=["str_fit_score", "property_id"], ascending=[False, True], kind="mergesort")
+    rows: list[dict[str, Any]] = []
+    for _, row in watch.head(top_n).iterrows():
+        list_price = _safe_float(row.get("list_price"))
+        sqft = _safe_float(row.get("sqft"))
+        rows.append(
+            {
+                "property_id": _safe_str(row.get("property_id")),
+                "address": ", ".join(
+                    [
+                        p
+                        for p in [
+                            _safe_str(row.get("street")),
+                            _safe_str(row.get("city")),
+                            _safe_str(row.get("state")),
+                            _safe_str(row.get("zip_code")),
+                        ]
+                        if p
+                    ]
+                ),
+                "property_url": _safe_str(row.get("property_url")),
+                "list_price": list_price,
+                "sqft": sqft,
+                "lot_sqft": _safe_float(row.get("lot_sqft")),
+                "price_per_sqft": (list_price / sqft) if sqft > 0 else 0.0,
+                "pool_signal_confidence": _safe_str(
+                    row.get("pool_signal_confidence"), _safe_str(row.get("pool_confidence"), "unknown")
+                ),
+                "pool_signal_sources": _safe_str(row.get("pool_signal_sources"), "none"),
+                "pool_evidence": _safe_str(row.get("pool_evidence"), "n/a"),
+                "pool_enrichment_result": _safe_str(row.get("pool_enrichment_result"), "queued"),
+            }
+        )
+    return rows
+
+
+def _palm_springs_priority_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
+    if df.empty:
+        return []
+    candidates = df[
+        df.get("is_palm_springs_priority_candidate", pd.Series(False, index=df.index)).fillna(False).astype(bool)
+    ].copy()
+    if candidates.empty:
+        return []
+
+    coc_post = pd.to_numeric(candidates.get("coc_post_tax"), errors="coerce")
+    coc_pre = pd.to_numeric(candidates.get("coc_pre_tax"), errors="coerce")
+    candidates["_priority_score_num"] = pd.to_numeric(candidates.get("priority_score"), errors="coerce").fillna(0.0)
+    candidates["_priority_coc_tie"] = coc_post.fillna(coc_pre).fillna(0.0)
+    candidates["_priority_rank_num"] = pd.to_numeric(candidates.get("priority_rank"), errors="coerce")
+    candidates = candidates.sort_values(
+        by=["_priority_rank_num", "_priority_score_num", "_priority_coc_tie", "property_id"],
+        ascending=[True, False, False, True],
+        kind="mergesort",
+    )
+
+    rows = _top_rows(candidates, top_n)
+    for i, row_idx in enumerate(candidates.head(top_n).index):
+        rows[i]["priority_score"] = _safe_float(candidates.loc[row_idx, "_priority_score_num"])
+        rows[i]["priority_rank"] = int(_safe_float(candidates.loc[row_idx, "_priority_rank_num"], float(i + 1)))
+        rows[i]["priority_reason_summary"] = _safe_str(
+            candidates.loc[row_idx, "priority_reason_summary"], "Balanced STR value profile."
+        )
+    return rows
+
+
+def build_dashboard_payload(scored_df: pd.DataFrame, *, top_n: int = 10, homes_limit: int = 100) -> dict[str, Any]:
     scored = scored_df.copy()
     if "status" in scored.columns:
         scored = scored[scored["status"].astype(str).str.upper() == "FOR_SALE"].copy()
@@ -222,30 +395,87 @@ def build_dashboard_payload(scored_df: pd.DataFrame, *, top_n: int = 5, homes_li
         scored["str_fit_score"] = 0.0
 
     fit = scored[scored["str_fit_pass"].fillna(False).astype(bool)].copy()
+    ranking_col = "coc_post_tax" if "coc_post_tax" in fit.columns else "coc_med"
     fit = fit.sort_values(
-        by=["coc_med", "str_fit_score", "property_id"], ascending=[False, False, True], kind="mergesort"
+        by=[ranking_col, "str_fit_score", "property_id"], ascending=[False, False, True], kind="mergesort"
     )
     if "scenario_tier" in fit.columns:
         luxury = fit[fit["scenario_tier"].astype(str) == "palm_springs_luxury"].copy()
     else:
         luxury = fit.iloc[0:0].copy()
     luxury = luxury.sort_values(
-        by=["coc_med", "str_fit_score", "property_id"], ascending=[False, False, True], kind="mergesort"
+        by=[ranking_col, "str_fit_score", "property_id"], ascending=[False, False, True], kind="mergesort"
+    )
+    budget_value_rows, total_budget_value_candidates = _budget_luxury_value_rows(
+        fit,
+        top_n=BUDGET_LUXURY_TOP_N,
+        max_price=BUDGET_LUXURY_MAX_PRICE,
+        coc_weight=0.70,
+        ppsf_weight=0.30,
     )
 
     top_fit = _top_rows(fit, top_n)
     top_luxury = _top_rows(luxury, top_n)
+    priority_rows = _palm_springs_priority_rows(scored, top_n)
+    watchlist_rows = _pool_watchlist_rows(scored, top_n=30)
+    total_pool_unknown_candidates = int(
+        (
+            scored.get("pool_enrichment_needed", pd.Series(False, index=scored.index)).fillna(False).astype(bool)
+            & ~scored.get("private_pool_verified", pd.Series(False, index=scored.index)).fillna(False).astype(bool)
+        ).sum()
+    )
+    total_pool_verified_after_enrichment = int(
+        scored.get("pool_enrichment_result", pd.Series("", index=scored.index))
+        .astype(str)
+        .eq("verified_after_enrichment")
+        .sum()
+    )
     homes_fit = [_row_to_home_payload(row) for _, row in fit.head(homes_limit).iterrows()]
+    palm_springs_mask = (
+        scored.get("city", pd.Series("", index=scored.index)).astype(str).str.strip().str.lower().eq("palm springs")
+    )
+    total_palm_springs_strict_pass = int(
+        (
+            palm_springs_mask
+            & scored.get("str_fit_pass", pd.Series(False, index=scored.index)).fillna(False).astype(bool)
+        ).sum()
+    )
+    total_palm_springs_priority_candidates = int(
+        scored.get("is_palm_springs_priority_candidate", pd.Series(False, index=scored.index))
+        .fillna(False)
+        .astype(bool)
+        .sum()
+    )
+    top_priority_score = _safe_float(priority_rows[0].get("priority_score")) if priority_rows else 0.0
 
     return {
         "total_ingested": int(len(scored)),
         "total_str_fit_passed": int(len(fit)),
         "top_properties": top_fit,
         "top_properties_luxury": top_luxury,
+        "top_properties_palm_springs_priority": priority_rows,
+        "top_properties_luxury_value_budget": budget_value_rows,
+        "pool_verification_watchlist": watchlist_rows,
+        "total_pool_unknown_candidates": total_pool_unknown_candidates,
+        "total_pool_verified_after_enrichment": total_pool_verified_after_enrichment,
+        "total_luxury_value_budget_candidates": total_budget_value_candidates,
+        "total_palm_springs_priority_candidates": total_palm_springs_priority_candidates,
+        "total_palm_springs_strict_pass": total_palm_springs_strict_pass,
+        "top_priority_score": top_priority_score,
+        "luxury_value_budget_cap": BUDGET_LUXURY_MAX_PRICE,
+        "luxury_value_note": (
+            "Ranked for value using post-tax COC (fallback: pre-tax COC) and lower price per sqft "
+            "for STR-fit for-sale properties under the budget cap."
+        ),
         "total_luxury_candidates": int(len(luxury)),
         "luxury_widget_note": (
             "Luxury = scenario_tier = palm_springs_luxury from COC routing assumptions. "
-            "Ranked by base COC among luxury-tier STR-fit listings."
+            "Ranked by post-tax COC (fallback: base COC) among luxury-tier STR-fit listings."
+        ),
+        "pool_watchlist_note": "Not STR-pass yet; awaiting private-pool verification.",
+        "priority_ranking_note": (
+            "Palm Springs for-sale STR-pass listings ranked by hybrid value score: lower price/sqft, "
+            "larger lot utility, and stronger under-cap neighborhood support; tie-break by post-tax COC."
         ),
         "homes": homes_fit,
         "total_houses_on_sale": int(len(scored)),
@@ -337,24 +567,82 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
           <ul id=\"filter-snapshot\"></ul>
         </div>
       </div>
+      <div class=\"card tablecard-main\">
+        <h3 class=\"title\">Palm Springs Priority List</h3>
+        <div class=\"sub\" id=\"priority-note\"></div>
+        <div class=\"sub\">Candidates: <strong id=\"priority-candidates\"></strong> | Palm Springs STR-Pass: <strong id=\"priority-strict-pass\"></strong> | Top Score: <strong id=\"priority-top-score\"></strong></div>
+        <table>
+          <thead>
+            <tr><th>Rank</th><th>Property ID</th><th>Address</th><th>Priority Score</th><th>List Price</th><th>Price / Sq Ft</th><th>Lot Size</th><th>Post-Tax COC</th><th>Reason</th></tr>
+          </thead>
+          <tbody id=\"priority-body\"></tbody>
+        </table>
+        <div id=\"priority-empty\" class=\"sub\" style=\"display:none;\"></div>
+      </div>
+      <div class=\"card tablecard-lux\">
+        <h3 class=\"title\">Pool Verification Watchlist</h3>
+        <div class=\"sub\" id=\"pool-watchlist-note\"></div>
+        <table>
+          <thead>
+            <tr><th>Property ID</th><th>Address</th><th>List Price</th><th>Sq Ft</th><th>Lot Size</th><th>Price / Sq Ft</th><th>Confidence</th><th>Signal Sources</th><th>Enrichment Result</th><th>Evidence</th></tr>
+          </thead>
+          <tbody id=\"pool-watchlist-body\"></tbody>
+        </table>
+        <div id=\"pool-watchlist-empty\" class=\"sub\" style=\"display:none;\"></div>
+      </div>
+      <div class=\"card tablecard-lux\">
+        <h3 class=\"title\">Luxury STR Value Under $1.5M</h3>
+        <div class=\"sub\" id=\"luxury-value-note\"></div>
+        <h4 class=\"sub\">STR Potential</h4>
+        <table>
+          <thead>
+            <tr><th>Property ID</th><th>Address</th><th>List Price</th><th>Sq Ft</th><th>Price / Sq Ft</th><th>Lot Size</th><th>Bedrooms</th><th>Bathrooms</th><th>Assumed ADR Rate</th><th>AI Insights</th></tr>
+          </thead>
+          <tbody id=\"luxury-value-potential-body\"></tbody>
+        </table>
+        <h4 class=\"sub\">Investment Metrics</h4>
+        <table>
+          <thead>
+            <tr><th>Pre-Tax COC</th><th>Post-Tax COC</th><th>Monthly Payment</th><th>Cash Needed</th><th>Annual Cash Flow (Med)</th><th>DSCR</th></tr>
+          </thead>
+          <tbody id=\"luxury-value-investment-body\"></tbody>
+        </table>
+        <div id=\"luxury-value-empty\" class=\"sub\" style=\"display:none;\"></div>
+      </div>
       <div class=\"card tablecard-lux\">
         <h3 class=\"title\">Luxury STR Opportunities</h3>
         <div class=\"sub\" id=\"luxury-note\"></div>
+        <h4 class=\"sub\">STR Potential</h4>
         <table>
           <thead>
-            <tr><th>Property</th><th>City/ZIP</th><th>Scenario Tier</th><th>List Price</th><th>COC (Low/Med/High)</th><th>Annual Cash Flow (Med)</th><th>Annual Debt Service</th><th>Total Cash Cost</th><th>STR Fit Score</th><th>AI Insights</th></tr>
+            <tr><th>Property ID</th><th>Address</th><th>List Price</th><th>Sq Ft</th><th>Price / Sq Ft</th><th>Lot Size</th><th>Bedrooms</th><th>Bathrooms</th><th>Assumed ADR Rate</th><th>AI Insights</th></tr>
           </thead>
-          <tbody id=\"luxury5-body\"></tbody>
+          <tbody id=\"luxury5-potential-body\"></tbody>
+        </table>
+        <h4 class=\"sub\">Investment Metrics</h4>
+        <table>
+          <thead>
+            <tr><th>Pre-Tax COC</th><th>Post-Tax COC</th><th>Monthly Payment</th><th>Cash Needed</th><th>Annual Cash Flow (Med)</th><th>DSCR</th></tr>
+          </thead>
+          <tbody id=\"luxury5-investment-body\"></tbody>
         </table>
         <div id=\"luxury-empty\" class=\"sub\" style=\"display:none;\"></div>
       </div>
       <div class=\"card tablecard-main\">
-        <h3 class=\"title\">Top 5 STR-Passing Properties by COC Return</h3>
+        <h3 class=\"title\">Top STR-Passing Properties by COC Return</h3>
+        <h4 class=\"sub\">STR Potential</h4>
         <table>
           <thead>
-            <tr><th>Property</th><th>City/ZIP</th><th>Scenario Tier</th><th>List Price</th><th>COC (Low/Med/High)</th><th>Annual Cash Flow (Med)</th><th>Annual Debt Service</th><th>Total Cash Cost</th><th>STR Fit Score</th><th>AI Insights</th></tr>
+            <tr><th>Property ID</th><th>Address</th><th>List Price</th><th>Sq Ft</th><th>Price / Sq Ft</th><th>Lot Size</th><th>Bedrooms</th><th>Bathrooms</th><th>Assumed ADR Rate</th><th>AI Insights</th></tr>
           </thead>
-          <tbody id=\"top5-body\"></tbody>
+          <tbody id=\"top5-potential-body\"></tbody>
+        </table>
+        <h4 class=\"sub\">Investment Metrics</h4>
+        <table>
+          <thead>
+            <tr><th>Pre-Tax COC</th><th>Post-Tax COC</th><th>Monthly Payment</th><th>Cash Needed</th><th>Annual Cash Flow (Med)</th><th>DSCR</th></tr>
+          </thead>
+          <tbody id=\"top5-investment-body\"></tbody>
         </table>
       </div>
       <div class=\"card breakdown\">
@@ -399,31 +687,148 @@ const currency = new Intl.NumberFormat('en-US', {{ style: 'currency', currency: 
 const pct = (v) => `${{(v*100).toFixed(2)}}%`;
 
 function renderTopFive() {{
-  const body = document.getElementById('top5-body');
-  body.innerHTML = '';
+  const potentialBody = document.getElementById('top5-potential-body');
+  const investmentBody = document.getElementById('top5-investment-body');
+  potentialBody.innerHTML = '';
+  investmentBody.innerHTML = '';
   (payload.top_properties || []).forEach((p) => {{
     const listing = p.property_url
       ? `<a class="link" href="${{p.property_url}}" target="_blank" rel="noopener noreferrer">View Listing</a>`
       : `<span style="color:#94a3b8">No link</span>`;
-    const row = document.createElement('tr');
-    row.innerHTML = `<td><strong>${{p.property_id}}</strong><br><span style="color:#64748b">${{p.address}}</span><br>${{listing}}</td>
-      <td>${{p.city || ''}}${{p.city && p.zip_code ? ', ' : ''}}${{p.zip_code || ''}}</td>
-      <td>${{p.scenario_tier || 'n/a'}}</td>
+    const potentialRow = document.createElement('tr');
+    potentialRow.innerHTML = `<td><strong>${{p.property_id}}</strong></td>
+      <td><span style="color:#334155">${{p.address}}</span><br>${{listing}}</td>
       <td>${{currency.format(p.list_price)}}</td>
-      <td>${{pct(p.coc_low || 0)}} / ${{pct(p.coc_med)}} / ${{pct(p.coc_high || 0)}}</td>
-      <td>${{currency.format(p.annual_cash_flow_med)}}</td>
-      <td>${{currency.format(p.annual_debt_service || 0)}}</td>
-      <td>${{currency.format(p.total_cash_cost_to_buy || 0)}}</td>
-      <td>${{(p.str_fit_score || 0).toFixed(1)}}</td>
+      <td>${{Number(p.sqft || 0).toLocaleString()}}</td>
+      <td>${{currency.format(p.price_per_sqft || 0)}}</td>
+      <td>${{Number(p.lot_sqft || 0).toLocaleString()}}</td>
+      <td>${{Number(p.beds || 0).toFixed(0)}}</td>
+      <td>${{Number(p.full_baths || 0).toFixed(1)}}</td>
+      <td>${{currency.format(p.adr_med || 0)}}</td>
       <td class="insight"><div>${{p.ai_insight_potential || 'Potential: n/a'}}</div><div>${{p.ai_insight_risk || 'Risk: n/a'}}</div></td>`;
+    potentialBody.appendChild(potentialRow);
+
+    const investmentRow = document.createElement('tr');
+    const dscr = p.dscr == null ? 'N/A' : Number(p.dscr).toFixed(2);
+    investmentRow.innerHTML = `<td>${{pct(p.coc_pre_tax)}}</td>
+      <td>${{pct(p.coc_post_tax)}}</td>
+      <td>${{currency.format(p.monthly_debt_payment || 0)}}</td>
+      <td>${{currency.format(p.total_cash_cost_to_buy || 0)}}</td>
+      <td>${{currency.format(p.annual_cash_flow_med)}}</td>
+      <td>${{dscr}}</td>`;
+    investmentBody.appendChild(investmentRow);
+  }});
+}}
+
+function renderPalmSpringsPriority() {{
+  const body = document.getElementById('priority-body');
+  const empty = document.getElementById('priority-empty');
+  body.innerHTML = '';
+  const rows = payload.top_properties_palm_springs_priority || [];
+  if (!rows.length) {{
+    empty.style.display = 'block';
+    empty.textContent = 'No Palm Springs priority candidates in current dataset.';
+    return;
+  }}
+  empty.style.display = 'none';
+  rows.forEach((p) => {{
+    const listing = p.property_url
+      ? `<a class="link" href="${{p.property_url}}" target="_blank" rel="noopener noreferrer">View Listing</a>`
+      : `<span style="color:#94a3b8">No link</span>`;
+    const row = document.createElement('tr');
+    row.innerHTML = `<td>${{Number(p.priority_rank || 0).toFixed(0)}}</td>
+      <td><strong>${{p.property_id}}</strong></td>
+      <td><span style="color:#334155">${{p.address}}</span><br>${{listing}}</td>
+      <td>${{(Number(p.priority_score || 0) * 100).toFixed(1)}}</td>
+      <td>${{currency.format(p.list_price)}}</td>
+      <td>${{currency.format(p.price_per_sqft || 0)}}</td>
+      <td>${{Number(p.lot_sqft || 0).toLocaleString()}}</td>
+      <td>${{pct(p.coc_post_tax)}}</td>
+      <td class="insight">${{p.priority_reason_summary || 'Balanced STR value profile.'}}</td>`;
     body.appendChild(row);
   }});
 }}
 
-function renderLuxuryFive() {{
-  const body = document.getElementById('luxury5-body');
-  const empty = document.getElementById('luxury-empty');
+function renderPoolWatchlist() {{
+  const body = document.getElementById('pool-watchlist-body');
+  const empty = document.getElementById('pool-watchlist-empty');
   body.innerHTML = '';
+  const rows = payload.pool_verification_watchlist || [];
+  if (!rows.length) {{
+    empty.style.display = 'block';
+    empty.textContent = 'No unresolved pool-verification candidates in current dataset.';
+    return;
+  }}
+  empty.style.display = 'none';
+  rows.forEach((p) => {{
+    const listing = p.property_url
+      ? `<a class="link" href="${{p.property_url}}" target="_blank" rel="noopener noreferrer">View Listing</a>`
+      : `<span style="color:#94a3b8">No link</span>`;
+    const row = document.createElement('tr');
+    row.innerHTML = `<td><strong>${{p.property_id}}</strong></td>
+      <td><span style="color:#334155">${{p.address}}</span><br>${{listing}}</td>
+      <td>${{currency.format(p.list_price)}}</td>
+      <td>${{Number(p.sqft || 0).toLocaleString()}}</td>
+      <td>${{Number(p.lot_sqft || 0).toLocaleString()}}</td>
+      <td>${{currency.format(p.price_per_sqft || 0)}}</td>
+      <td>${{p.pool_signal_confidence || 'unknown'}}</td>
+      <td>${{p.pool_signal_sources || 'none'}}</td>
+      <td>${{p.pool_enrichment_result || 'queued'}}</td>
+      <td class="insight">${{p.pool_evidence || 'n/a'}}</td>`;
+    body.appendChild(row);
+  }});
+}}
+
+function renderLuxuryValueBudget() {{
+  const potentialBody = document.getElementById('luxury-value-potential-body');
+  const investmentBody = document.getElementById('luxury-value-investment-body');
+  const empty = document.getElementById('luxury-value-empty');
+  potentialBody.innerHTML = '';
+  investmentBody.innerHTML = '';
+
+  const rows = payload.top_properties_luxury_value_budget || [];
+  if (!rows.length) {{
+    empty.style.display = 'block';
+    empty.textContent = 'No STR-fit luxury-value properties under $1.5M in current dataset.';
+    return;
+  }}
+
+  empty.style.display = 'none';
+  rows.forEach((p) => {{
+    const listing = p.property_url
+      ? `<a class="link" href="${{p.property_url}}" target="_blank" rel="noopener noreferrer">View Listing</a>`
+      : `<span style="color:#94a3b8">No link</span>`;
+    const potentialRow = document.createElement('tr');
+    potentialRow.innerHTML = `<td><strong>${{p.property_id}}</strong></td>
+      <td><span style="color:#334155">${{p.address}}</span><br>${{listing}}</td>
+      <td>${{currency.format(p.list_price)}}</td>
+      <td>${{Number(p.sqft || 0).toLocaleString()}}</td>
+      <td>${{currency.format(p.price_per_sqft || 0)}}</td>
+      <td>${{Number(p.lot_sqft || 0).toLocaleString()}}</td>
+      <td>${{Number(p.beds || 0).toFixed(0)}}</td>
+      <td>${{Number(p.full_baths || 0).toFixed(1)}}</td>
+      <td>${{currency.format(p.adr_med || 0)}}</td>
+      <td class="insight"><div>${{p.ai_insight_potential || 'Potential: n/a'}}</div><div>${{p.ai_insight_risk || 'Risk: n/a'}}</div></td>`;
+    potentialBody.appendChild(potentialRow);
+
+    const investmentRow = document.createElement('tr');
+    const dscr = p.dscr == null ? 'N/A' : Number(p.dscr).toFixed(2);
+    investmentRow.innerHTML = `<td>${{pct(p.coc_pre_tax)}}</td>
+      <td>${{pct(p.coc_post_tax)}}</td>
+      <td>${{currency.format(p.monthly_debt_payment || 0)}}</td>
+      <td>${{currency.format(p.total_cash_cost_to_buy || 0)}}</td>
+      <td>${{currency.format(p.annual_cash_flow_med)}}</td>
+      <td>${{dscr}}</td>`;
+    investmentBody.appendChild(investmentRow);
+  }});
+}}
+
+function renderLuxuryFive() {{
+  const potentialBody = document.getElementById('luxury5-potential-body');
+  const investmentBody = document.getElementById('luxury5-investment-body');
+  const empty = document.getElementById('luxury-empty');
+  potentialBody.innerHTML = '';
+  investmentBody.innerHTML = '';
 
   const rows = payload.top_properties_luxury || [];
   if (!rows.length) {{
@@ -437,18 +842,28 @@ function renderLuxuryFive() {{
     const listing = p.property_url
       ? `<a class="link" href="${{p.property_url}}" target="_blank" rel="noopener noreferrer">View Listing</a>`
       : `<span style="color:#94a3b8">No link</span>`;
-    const row = document.createElement('tr');
-    row.innerHTML = `<td><strong>${{p.property_id}}</strong><br><span style="color:#64748b">${{p.address}}</span><br>${{listing}}</td>
-      <td>${{p.city || ''}}${{p.city && p.zip_code ? ', ' : ''}}${{p.zip_code || ''}}</td>
-      <td>${{p.scenario_tier || 'n/a'}}</td>
+    const potentialRow = document.createElement('tr');
+    potentialRow.innerHTML = `<td><strong>${{p.property_id}}</strong></td>
+      <td><span style="color:#334155">${{p.address}}</span><br>${{listing}}</td>
       <td>${{currency.format(p.list_price)}}</td>
-      <td>${{pct(p.coc_low || 0)}} / ${{pct(p.coc_med)}} / ${{pct(p.coc_high || 0)}}</td>
-      <td>${{currency.format(p.annual_cash_flow_med)}}</td>
-      <td>${{currency.format(p.annual_debt_service || 0)}}</td>
-      <td>${{currency.format(p.total_cash_cost_to_buy || 0)}}</td>
-      <td>${{(p.str_fit_score || 0).toFixed(1)}}</td>
+      <td>${{Number(p.sqft || 0).toLocaleString()}}</td>
+      <td>${{currency.format(p.price_per_sqft || 0)}}</td>
+      <td>${{Number(p.lot_sqft || 0).toLocaleString()}}</td>
+      <td>${{Number(p.beds || 0).toFixed(0)}}</td>
+      <td>${{Number(p.full_baths || 0).toFixed(1)}}</td>
+      <td>${{currency.format(p.adr_med || 0)}}</td>
       <td class="insight"><div>${{p.ai_insight_potential || 'Potential: n/a'}}</div><div>${{p.ai_insight_risk || 'Risk: n/a'}}</div></td>`;
-    body.appendChild(row);
+    potentialBody.appendChild(potentialRow);
+
+    const investmentRow = document.createElement('tr');
+    const dscr = p.dscr == null ? 'N/A' : Number(p.dscr).toFixed(2);
+    investmentRow.innerHTML = `<td>${{pct(p.coc_pre_tax)}}</td>
+      <td>${{pct(p.coc_post_tax)}}</td>
+      <td>${{currency.format(p.monthly_debt_payment || 0)}}</td>
+      <td>${{currency.format(p.total_cash_cost_to_buy || 0)}}</td>
+      <td>${{currency.format(p.annual_cash_flow_med)}}</td>
+      <td>${{dscr}}</td>`;
+    investmentBody.appendChild(investmentRow);
   }});
 }}
 
@@ -530,7 +945,16 @@ function init() {{
   const select = document.getElementById('home-select');
   select.addEventListener('change', (e) => updateForHome(Number(e.target.value)));
 
+  document.getElementById('luxury-value-note').textContent = payload.luxury_value_note || '';
   document.getElementById('luxury-note').textContent = payload.luxury_widget_note || '';
+  document.getElementById('pool-watchlist-note').textContent = payload.pool_watchlist_note || '';
+  document.getElementById('priority-note').textContent = payload.priority_ranking_note || '';
+  document.getElementById('priority-candidates').textContent = String(payload.total_palm_springs_priority_candidates || 0);
+  document.getElementById('priority-strict-pass').textContent = String(payload.total_palm_springs_strict_pass || 0);
+  document.getElementById('priority-top-score').textContent = (Number(payload.top_priority_score || 0) * 100).toFixed(1);
+  renderPalmSpringsPriority();
+  renderPoolWatchlist();
+  renderLuxuryValueBudget();
   renderTopFive();
   renderLuxuryFive();
   populateHomes();

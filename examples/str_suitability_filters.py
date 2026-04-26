@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import math
 import re
@@ -36,11 +37,19 @@ CO_OWNERSHIP_KEYWORDS = (
 )
 UNIT_ADDRESS_TOKENS = ("unit", "apt", "apartment", "suite", "ste", "#", "lot", "space", "spc")
 POOL_KEYWORDS = (" pool ", "swimming pool", "spa", "hot tub", "plunge pool")
+POOL_PRIVATE_YES_KEYWORDS = ("pool private: yes", "private pool")
+POOL_PRIVATE_NO_KEYWORDS = ("pool private: no", "community pool", "community swimming pool", "shared pool")
 POOL_COLUMNS = (
+    "private_pool_verified",
+    "pool_conflict",
+    "pool_community_only",
+    "pool_confidence",
+    "pool_signal_sources",
+    "pool_evidence",
     "is_private_pool",
     "is_private_pool_known",
-    "pool_type",
     "pool_available",
+    "pool_type",
     "pool",
     "has_pool",
     "has_pool_inferred",
@@ -52,6 +61,7 @@ POOL_COLUMNS = (
     "remarks",
     "features",
 )
+POOL_RAW_COLUMNS = ("raw_details", "raw_tags", "raw_photo_tags")
 
 MANUAL_EXCLUDED_PROPERTY_IDS = {
     "1086968872",  # 470 E Avenida Olancha, Palm Springs, CA 92264
@@ -90,6 +100,7 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
         hard_gates = {
             "require_quality": True,
             "require_str_supported_neighborhood": bool(requirements.get("require_str_supported_neighborhood", True)),
+            "require_private_pool": bool(requirements.get("require_pool", True)),
             "require_price_range": True,
             "require_beds_baths": True,
             "require_location": bool(location.get("enabled", True)),
@@ -99,6 +110,22 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
             "min_list_price": float(thresholds.get("min_list_price", 100000)),
             "max_list_price": float(thresholds.get("max_list_price", 3000000)),
         }
+    else:
+        hard_gates.setdefault("require_private_pool", bool(requirements.get("require_pool", True)))
+
+    pool_verification = raw.get("pool_verification", {})
+    normalized_pool_verification = {
+        "allow_high_conf_inferred_private": bool(pool_verification.get("allow_high_conf_inferred_private", True)),
+        "high_conf_levels": list(pool_verification.get("high_conf_levels", ["high"])),
+        "min_verified_coverage_warn": float(pool_verification.get("min_verified_coverage_warn", 0.05)),
+        "fail_on_low_verified_coverage": bool(pool_verification.get("fail_on_low_verified_coverage", False)),
+    }
+    enrichment_workflow = raw.get("enrichment_workflow", {})
+    normalized_enrichment_workflow = {
+        "enabled": bool(enrichment_workflow.get("enabled", False)),
+        "listing_type": str(enrichment_workflow.get("listing_type", "for_sale")),
+        "past_days": int(enrichment_workflow.get("past_days", 365)),
+    }
 
     ranking_weights = raw.get("ranking_weights", {})
     if not ranking_weights:
@@ -124,6 +151,38 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
             "ranking_direction": "desc",
             "coc_assumptions_path": str(DEFAULT_COC_ASSUMPTIONS_PATH),
         }
+
+    priority_ranking = raw.get("priority_ranking", {})
+    default_priority_weights = {
+        "price_per_sqft": 0.40,
+        "lot_size": 0.25,
+        "neighborhood_support": 0.35,
+    }
+    raw_priority_weights = priority_ranking.get("factor_weights", {})
+    normalized_priority_weights = {
+        "price_per_sqft": _safe_float(
+            raw_priority_weights.get("price_per_sqft"), default_priority_weights["price_per_sqft"]
+        ),
+        "lot_size": _safe_float(raw_priority_weights.get("lot_size"), default_priority_weights["lot_size"]),
+        "neighborhood_support": _safe_float(
+            raw_priority_weights.get("neighborhood_support"), default_priority_weights["neighborhood_support"]
+        ),
+    }
+    total_weight = sum(max(0.0, v) for v in normalized_priority_weights.values())
+    if total_weight <= 0:
+        normalized_priority_weights = default_priority_weights
+    else:
+        normalized_priority_weights = {k: (max(0.0, v) / total_weight) for k, v in normalized_priority_weights.items()}
+    priority_ranking = {
+        "enabled": bool(priority_ranking.get("enabled", True)),
+        "target_city": str(priority_ranking.get("target_city", "Palm Springs")),
+        "require_for_sale_status": bool(priority_ranking.get("require_for_sale_status", True)),
+        "require_str_fit_pass": bool(priority_ranking.get("require_str_fit_pass", True)),
+        "factor_weights": normalized_priority_weights,
+        "tie_break_metrics": list(
+            priority_ranking.get("tie_break_metrics", ["coc_post_tax", "coc_pre_tax", "property_id"])
+        ),
+    }
 
     geography = raw.get("geography", {})
     if not geography:
@@ -152,6 +211,9 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
         "geography": geography,
         "ranking_weights": ranking_weights,
         "shortlist": shortlist,
+        "pool_verification": normalized_pool_verification,
+        "enrichment_workflow": normalized_enrichment_workflow,
+        "priority_ranking": priority_ranking,
         # Keep legacy sections for compatibility/audit sheets.
         "thresholds": {
             "min_beds": hard_gates["min_beds"],
@@ -161,8 +223,8 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
         },
         "requirements": {
             "require_str_supported_neighborhood": hard_gates["require_str_supported_neighborhood"],
-            "require_pool": False,
-            "exclude_unknown_private_pool": False,
+            "require_pool": hard_gates.get("require_private_pool", True),
+            "exclude_unknown_private_pool": hard_gates.get("require_private_pool", True),
         },
         "scoring_weights": {
             "quality": ranking_weights.get("quality", 30),
@@ -287,45 +349,154 @@ def _is_manually_excluded_row(row: pd.Series) -> bool:
     return _address_key(row) in MANUAL_EXCLUDED_ADDRESSES
 
 
-def _infer_pool(row: pd.Series) -> tuple[bool, str]:
+def _parse_json_like_list(value: Any) -> list[Any]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _text_contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _infer_pool(row: pd.Series) -> tuple[bool, bool, str]:
+    generic_pool_source: str | None = None
+
+    for column in POOL_RAW_COLUMNS:
+        if column not in row.index:
+            continue
+
+        raw_values = _parse_json_like_list(row.get(column))
+        for raw in raw_values:
+            if isinstance(raw, dict):
+                normalized = f" {json.dumps(raw, ensure_ascii=False).strip().lower()} "
+            else:
+                normalized = f" {_safe_str(raw).strip().lower()} "
+            if not normalized.strip():
+                continue
+            if _text_contains_any(normalized, POOL_PRIVATE_YES_KEYWORDS):
+                return True, True, column
+            if _text_contains_any(normalized, POOL_PRIVATE_NO_KEYWORDS):
+                return False, True, column
+            if _text_contains_any(normalized, POOL_KEYWORDS):
+                generic_pool_source = generic_pool_source or column
+
     for column in POOL_COLUMNS:
         if column not in row.index:
             continue
         value = row.get(column)
+        if column == "is_private_pool":
+            known_value = (
+                _safe_bool(row.get("is_private_pool_known")) if "is_private_pool_known" in row.index else False
+            )
+            return _safe_bool(value), bool(known_value), "is_private_pool"
+        if column == "is_private_pool_known":
+            continue
+        if column == "pool_available":
+            available = _safe_bool(value)
+            if available:
+                generic_pool_source = generic_pool_source or column
+            continue
         if isinstance(value, bool):
-            return value, column
+            if column in {"private_pool", "pool_private"}:
+                return value, True, column
+            if value:
+                generic_pool_source = generic_pool_source or column
+            continue
         if isinstance(value, (int, float)) and pd.notna(value):
-            return bool(value > 0), column
+            if value > 0:
+                generic_pool_source = generic_pool_source or column
+            continue
         text = f" {_safe_str(value).strip().lower()} "
-        if any(keyword in text for keyword in POOL_KEYWORDS):
-            return True, column
+        if _text_contains_any(text, POOL_PRIVATE_YES_KEYWORDS):
+            return True, True, column
+        if _text_contains_any(text, POOL_PRIVATE_NO_KEYWORDS):
+            return False, True, column
+        if _text_contains_any(text, POOL_KEYWORDS):
+            generic_pool_source = generic_pool_source or column
 
     for column in ("street", "property_url", "neighborhoods"):
         text = f" {_safe_str(row.get(column)).strip().lower()} "
-        if any(keyword in text for keyword in POOL_KEYWORDS):
-            return True, column
-    return False, "none"
+        if _text_contains_any(text, POOL_KEYWORDS):
+            generic_pool_source = generic_pool_source or column
+
+    if generic_pool_source:
+        return False, False, generic_pool_source
+    return False, False, "none"
 
 
-def _resolve_private_pool(row: pd.Series) -> tuple[bool, bool, str, float, str]:
+def _resolve_private_pool(row: pd.Series, assumptions: dict[str, Any]) -> tuple[bool, bool, bool, str, float, str, str]:
+    high_conf_levels = {
+        str(level).strip().lower() for level in assumptions.get("pool_verification", {}).get("high_conf_levels", [])
+    }
+    allow_high_conf_inferred = bool(
+        assumptions.get("pool_verification", {}).get("allow_high_conf_inferred_private", True)
+    )
+
+    if "private_pool_verified" in row.index:
+        private_pool_verified = _safe_bool(row.get("private_pool_verified"))
+        is_private_pool = _safe_bool(row.get("is_private_pool"))
+        is_private_pool_known = _safe_bool(row.get("is_private_pool_known"))
+        pool_conflict = _safe_bool(row.get("pool_conflict"))
+        community_only = _safe_bool(row.get("pool_community_only"))
+        pool_conf = _safe_str(row.get("pool_confidence")).strip().lower()
+
+        if private_pool_verified:
+            return True, True, True, "upstream_verified", 1.0, "high", "Private pool verified"
+        if pool_conflict:
+            return False, True, False, "upstream_conflict", 0.0, "high", "Pool signal conflict"
+        if community_only:
+            return False, True, False, "upstream_community_only", 0.0, "high", "Community pool only"
+        if is_private_pool_known and not is_private_pool:
+            return False, True, False, "upstream_private_no", 0.0, "high", "Private pool not present"
+        if allow_high_conf_inferred and is_private_pool and pool_conf in high_conf_levels:
+            return True, True, True, "upstream_high_conf_inferred", 1.0, "high", "Private pool verified"
+        return (
+            False,
+            bool(is_private_pool_known),
+            False,
+            "upstream_unknown",
+            0.0,
+            pool_conf or "low",
+            "Private pool unknown",
+        )
+
     if "is_private_pool" in row.index and "is_private_pool_known" in row.index:
         is_private_pool = _safe_bool(row.get("is_private_pool"))
         is_private_pool_known = _safe_bool(row.get("is_private_pool_known"))
         source = "canonical"
     else:
-        inferred_pool, source = _infer_pool(row)
-        is_private_pool = inferred_pool
-        is_private_pool_known = False
-
+        is_private_pool, is_private_pool_known, source = _infer_pool(row)
     if is_private_pool_known and is_private_pool:
-        return True, True, source, 1.0, "high"
+        return True, True, True, source, 1.0, "high", "Private pool verified"
     if is_private_pool_known and not is_private_pool:
-        return False, True, source, 0.0, "high"
+        return False, True, False, source, 0.0, "high", "Private pool not present"
 
-    inferred_pool, inferred_source = _infer_pool(row)
+    inferred_pool, inferred_known, inferred_source = _infer_pool(row)
     if inferred_pool:
-        return False, False, f"{source}|{inferred_source}", 0.5, "medium"
-    return False, False, f"{source}:unknown_private_pool", 0.0, "low"
+        conf = "high" if (allow_high_conf_inferred and not inferred_known) else "medium"
+        verified = bool(allow_high_conf_inferred and conf in high_conf_levels)
+        return (
+            verified,
+            bool(inferred_known),
+            verified,
+            f"{source}|{inferred_source}",
+            0.5,
+            conf,
+            ("Private pool verified" if verified else "Private pool unknown"),
+        )
+    return False, False, False, f"{source}:unknown_private_pool", 0.0, "low", "Private pool unknown"
 
 
 def _quality_fail_reason(row: pd.Series, co_group_keys: set[tuple[Any, Any, Any, Any, Any, Any]]) -> str:
@@ -458,9 +629,15 @@ def _score_row(
     quality_reason = _quality_fail_reason(row, co_group_keys)
     quality_pass = quality_reason == ""
 
-    has_private_pool, is_private_pool_known, pool_source, pool_signal_score, pool_signal_conf = _resolve_private_pool(
-        row
-    )
+    (
+        has_private_pool,
+        is_private_pool_known,
+        private_pool_verified,
+        pool_source,
+        pool_signal_score,
+        pool_signal_conf,
+        pool_fail_reason,
+    ) = _resolve_private_pool(row, assumptions)
     str_support = _compute_str_support(row, assumptions)
     location_fit = _compute_location_fit(row, assumptions)
     geo_cap_zip, geo_cap_zip_reason = _compute_geo_cap_zip(row, assumptions, cap_eligible_zips, cap_status)
@@ -477,9 +654,16 @@ def _score_row(
     )
     price_pass = float(hard_gates["min_list_price"]) <= price <= float(hard_gates["max_list_price"])
 
+    # Balanced pool gate:
+    # - Explicitly confirmed private pool always passes.
+    # - Unknown private-pool status can pass only when we have strong inferred
+    #   pool evidence from listing text/fields (pool_signal_score >= 0.5).
+    private_pool_pass = private_pool_verified
+
     checks = {
         "quality": quality_pass if hard_gates.get("require_quality", True) else True,
         "str_support": str_support if hard_gates.get("require_str_supported_neighborhood", True) else True,
+        "pool": private_pool_pass if hard_gates.get("require_private_pool", True) else True,
         "beds_baths": beds_baths_pass if hard_gates.get("require_beds_baths", True) else True,
         "price_range": price_pass if hard_gates.get("require_price_range", True) else True,
         "location": location_fit if hard_gates.get("require_location", True) else True,
@@ -497,6 +681,7 @@ def _score_row(
     pass_messages = {
         "quality": "Listing quality checks passed",
         "str_support": "STR-supported neighborhood confirmed",
+        "pool": "Private pool verified",
         "beds_baths": f"Beds/Baths meets {hard_gates['min_beds']}+/{hard_gates['min_full_baths']}+",
         "price_range": f"List price in range [{int(hard_gates['min_list_price'])}, {int(hard_gates['max_list_price'])}]",
         "location": "Preferred location match",
@@ -505,6 +690,7 @@ def _score_row(
     fail_messages = {
         "quality": "Listing quality checks failed",
         "str_support": "Neighborhood is not STR-supported under current cap",
+        "pool": "Private pool verification required",
         "beds_baths": f"Beds/Baths below {hard_gates['min_beds']}+/{hard_gates['min_full_baths']}+ threshold",
         "price_range": f"List price outside [{int(hard_gates['min_list_price'])}, {int(hard_gates['max_list_price'])}]",
         "location": "Location outside preferred cities",
@@ -519,12 +705,10 @@ def _score_row(
         else:
             reasons_fail.append(fail_messages[key])
 
-    if has_private_pool:
+    if private_pool_verified:
         reasons_pass.append("Private pool confirmed")
-    elif is_private_pool_known:
-        reasons_fail.append("Private pool not present")
     else:
-        reasons_fail.append("Private pool unknown")
+        reasons_fail.append(pool_fail_reason or "Private pool unknown")
 
     if not quality_pass and quality_reason:
         reasons_fail.append(quality_reason)
@@ -543,8 +727,8 @@ def _score_row(
         if "is_private_pool_known" not in row.index
         else _safe_bool(row.get("is_private_pool_known"))
     )
-    # Backward-compatible; no longer a hard gate.
-    output["eligible_pool"] = has_private_pool
+    output["private_pool_verified"] = private_pool_verified
+    output["eligible_pool"] = private_pool_pass
 
     output["eligible_beds_baths"] = beds_baths_pass
     output["eligible_price_range"] = price_pass
@@ -563,7 +747,157 @@ def _score_row(
     output["is_shortlist_candidate"] = False
     output["shortlist_rank"] = pd.NA
     output["shortlist_reason"] = "Not evaluated for shortlist"
+    output["is_palm_springs_priority_candidate"] = False
+    output["priority_score"] = pd.NA
+    output["priority_rank"] = pd.NA
+    output["priority_reason_summary"] = "Not evaluated for Palm Springs priority ranking"
     return output
+
+
+def _score_dataframe(rows: pd.DataFrame, assumptions: dict[str, Any]) -> pd.DataFrame:
+    if rows.empty:
+        return pd.DataFrame()
+    cap_eligible_zips, cap_status = _derive_cap_eligible_zip_codes(assumptions)
+    co_group_keys = _co_ownership_group_keys(rows)
+    scored_rows = [
+        _score_row(
+            row,
+            assumptions,
+            co_group_keys,
+            cap_eligible_zips=cap_eligible_zips,
+            cap_status=cap_status,
+        )
+        for _, row in rows.iterrows()
+    ]
+    scored_df = pd.DataFrame(scored_rows)
+    if scored_df.empty:
+        return scored_df
+    scored_df["cap_eligible_zip_set"] = ",".join(sorted(cap_eligible_zips)) if cap_eligible_zips else pd.NA
+    scored_df["cap_data_status"] = cap_status
+    return scored_df
+
+
+def _build_pool_enrichment_queue(scored_df: pd.DataFrame) -> pd.DataFrame:
+    if scored_df.empty:
+        return scored_df
+    unresolved_pool = ~scored_df.get("private_pool_verified", pd.Series(False, index=scored_df.index)).fillna(
+        False
+    ).astype(bool) & ~scored_df.get("is_private_pool_known", pd.Series(False, index=scored_df.index)).fillna(
+        False
+    ).astype(
+        bool
+    )
+    baseline_except_pool = (
+        scored_df.get("quality_pass", pd.Series(False, index=scored_df.index)).fillna(False).astype(bool)
+        & scored_df.get("eligible_str_supported", pd.Series(False, index=scored_df.index)).fillna(False).astype(bool)
+        & scored_df.get("eligible_beds_baths", pd.Series(False, index=scored_df.index)).fillna(False).astype(bool)
+        & scored_df.get("eligible_price_range", pd.Series(False, index=scored_df.index)).fillna(False).astype(bool)
+        & scored_df.get("eligible_location", pd.Series(False, index=scored_df.index)).fillna(False).astype(bool)
+        & scored_df.get("eligible_geo_cap_zip", pd.Series(False, index=scored_df.index)).fillna(False).astype(bool)
+    )
+    queue_mask = unresolved_pool & baseline_except_pool
+    return scored_df[queue_mask].copy()
+
+
+def _fetch_enriched_pool_rows(queue_df: pd.DataFrame, assumptions: dict[str, Any]) -> pd.DataFrame:
+    if queue_df.empty:
+        return pd.DataFrame()
+    enrichment_cfg = assumptions.get("enrichment_workflow", {})
+    listing_type = str(enrichment_cfg.get("listing_type", "for_sale"))
+    past_days = int(enrichment_cfg.get("past_days", 365))
+
+    examples_dir = str((Path(__file__).resolve().parent))
+    if examples_dir not in sys.path:
+        sys.path.insert(0, examples_dir)
+    try:
+        import scrape_listings_core as ingest
+    except Exception:
+        return pd.DataFrame()
+
+    needed_ids = {str(pid) for pid in queue_df.get("property_id", pd.Series(dtype="object")).astype(str).tolist()}
+    fetched_rows: list[pd.DataFrame] = []
+    for zip_code in sorted(
+        {_normalize_zip(z) for z in queue_df.get("zip_code", pd.Series(dtype="object")) if _normalize_zip(z)}
+    ):
+        try:
+            fetched = ingest.get_property_details(zip_code, listing_type, past_days=past_days)
+        except Exception:
+            continue
+        if fetched.empty or "property_id" not in fetched.columns:
+            continue
+        narrowed = fetched[fetched["property_id"].astype(str).isin(needed_ids)].copy()
+        if narrowed.empty:
+            continue
+        narrowed["enrichment_attempted_at"] = datetime.now(timezone.utc).isoformat()
+        narrowed["enrichment_source"] = "scrape_listings_core.get_property_details"
+        narrowed["enrichment_round"] = 2
+        fetched_rows.append(narrowed)
+
+    if not fetched_rows:
+        return pd.DataFrame()
+    all_fetched = pd.concat(fetched_rows, ignore_index=True)
+    return all_fetched.drop_duplicates(subset=["property_id"], keep="last").copy()
+
+
+def _apply_enrichment_updates(rows: pd.DataFrame, enriched_rows: pd.DataFrame) -> pd.DataFrame:
+    if (
+        rows.empty
+        or enriched_rows.empty
+        or "property_id" not in rows.columns
+        or "property_id" not in enriched_rows.columns
+    ):
+        return rows
+    updated = rows.copy()
+    update_cols = [c for c in enriched_rows.columns if c in updated.columns or c.startswith("enrichment_")]
+    for _, enriched_row in enriched_rows.iterrows():
+        pid = str(enriched_row.get("property_id"))
+        mask = updated["property_id"].astype(str) == pid
+        if not mask.any():
+            continue
+        for col in update_cols:
+            updated.loc[mask, col] = enriched_row.get(col)
+    return updated
+
+
+def _attach_pool_enrichment_status(
+    scored_df: pd.DataFrame,
+    queue_df: pd.DataFrame,
+    enriched_rows: pd.DataFrame,
+) -> pd.DataFrame:
+    if scored_df.empty:
+        return scored_df
+    result = scored_df.copy()
+    for col in ("enrichment_attempted_at", "enrichment_source", "enrichment_round"):
+        if col not in result.columns:
+            result[col] = pd.NA
+    queue_ids = {str(pid) for pid in queue_df.get("property_id", pd.Series(dtype="object")).astype(str).tolist()}
+    refreshed_ids = {
+        str(pid) for pid in enriched_rows.get("property_id", pd.Series(dtype="object")).astype(str).tolist()
+    }
+
+    result["pool_enrichment_needed"] = result["property_id"].astype(str).map(lambda pid: pid in queue_ids)
+    result["pool_enrichment_attempted"] = result["property_id"].astype(str).map(lambda pid: pid in queue_ids)
+    result["pool_enrichment_result"] = "not_needed"
+    needed_mask = result["pool_enrichment_needed"].fillna(False).astype(bool)
+    refreshed_mask = result["property_id"].astype(str).map(lambda pid: pid in refreshed_ids)
+    result.loc[needed_mask, "pool_enrichment_result"] = "attempted_no_data"
+    verified_mask = result.get("private_pool_verified", pd.Series(False, index=result.index)).fillna(False).astype(bool)
+    still_unknown_mask = (
+        needed_mask
+        & refreshed_mask
+        & ~verified_mask
+        & ~result.get("is_private_pool_known", pd.Series(False, index=result.index)).fillna(False).astype(bool)
+    )
+    resolved_not_private_mask = (
+        needed_mask
+        & refreshed_mask
+        & ~verified_mask
+        & result.get("is_private_pool_known", pd.Series(False, index=result.index)).fillna(False).astype(bool)
+    )
+    result.loc[needed_mask & refreshed_mask & verified_mask, "pool_enrichment_result"] = "verified_after_enrichment"
+    result.loc[still_unknown_mask, "pool_enrichment_result"] = "still_unknown"
+    result.loc[resolved_not_private_mask, "pool_enrichment_result"] = "resolved_not_private"
+    return result
 
 
 def _load_coc_scores(df: pd.DataFrame, assumptions: dict[str, Any]) -> pd.DataFrame:
@@ -663,7 +997,131 @@ def _apply_shortlist(df: pd.DataFrame, assumptions: dict[str, Any]) -> pd.DataFr
     return working
 
 
+def _norm_series(series: pd.Series, *, inverse: bool = False) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce")
+    min_val = values.min(skipna=True)
+    max_val = values.max(skipna=True)
+    if pd.isna(min_val) or pd.isna(max_val) or min_val == max_val:
+        base = pd.Series(0.5, index=series.index, dtype="float64")
+    else:
+        base = (values - float(min_val)) / float(max_val - min_val)
+        base = base.fillna(0.5)
+    return 1.0 - base if inverse else base
+
+
+def _resolve_neighborhood_support_metric(df: pd.DataFrame) -> pd.Series:
+    candidates = (
+        "str_nbhd_capacity_remaining_ratio",
+        "str_nbhd_remaining_capacity_ratio",
+        "str_nbhd_capacity_ratio",
+        "str_nbhd_support_score",
+        "str_nbhd_under_cap_current",
+        "eligible_str_supported",
+        "eligible_geo_cap_zip",
+    )
+    for col in candidates:
+        if col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce")
+    return pd.Series(0.0, index=df.index, dtype="float64")
+
+
+def _priority_reason(row: pd.Series) -> str:
+    parts: list[str] = []
+    ppsf_score = _safe_float(row.get("_priority_ppsf_component"))
+    lot_score = _safe_float(row.get("_priority_lot_component"))
+    nbhd_score = _safe_float(row.get("_priority_nbhd_component"))
+    if ppsf_score >= 0.6:
+        parts.append("attractive price per sqft")
+    if lot_score >= 0.6:
+        parts.append("strong lot-size utility")
+    if nbhd_score >= 0.6:
+        parts.append("favorable under-cap STR neighborhood support")
+    if not parts:
+        parts.append("balanced value profile across STR factors")
+    return "Ranked high for " + ", ".join(parts[:2]) + "."
+
+
+def _apply_palm_springs_priority(df: pd.DataFrame, assumptions: dict[str, Any]) -> pd.DataFrame:
+    priority_cfg = assumptions.get("priority_ranking", {})
+    if not priority_cfg.get("enabled", True) or df.empty:
+        return df
+
+    working = df.copy()
+    target_city = str(priority_cfg.get("target_city", "Palm Springs")).strip().lower()
+    in_city = (
+        working.get("city", pd.Series("", index=working.index)).astype(str).str.strip().str.lower().eq(target_city)
+    )
+    for_sale = (
+        working.get("status", pd.Series("", index=working.index)).astype(str).str.strip().str.upper().eq("FOR_SALE")
+        if priority_cfg.get("require_for_sale_status", True)
+        else pd.Series(True, index=working.index)
+    )
+    strict_pass = (
+        working.get("str_fit_pass", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+        if priority_cfg.get("require_str_fit_pass", True)
+        else pd.Series(True, index=working.index)
+    )
+    strict_components = (
+        working.get("quality_pass", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+        & working.get("eligible_str_supported", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+        & working.get("eligible_geo_cap_zip", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+        & working.get("private_pool_verified", pd.Series(False, index=working.index)).fillna(False).astype(bool)
+    )
+
+    candidate_mask = in_city & for_sale & strict_pass & strict_components
+    working["is_palm_springs_priority_candidate"] = candidate_mask
+    working["priority_score"] = pd.NA
+    working["priority_rank"] = pd.NA
+    working["priority_reason_summary"] = "Not eligible for Palm Springs priority ranking"
+
+    if not candidate_mask.any():
+        return working
+
+    candidates = working[candidate_mask].copy()
+    list_price = pd.to_numeric(candidates.get("list_price"), errors="coerce")
+    sqft = pd.to_numeric(candidates.get("sqft"), errors="coerce")
+    candidates["_priority_price_per_sqft"] = (list_price / sqft).where(sqft > 0)
+    candidates["_priority_ppsf_component"] = _norm_series(candidates["_priority_price_per_sqft"], inverse=True)
+    candidates["_priority_lot_component"] = _norm_series(candidates.get("lot_sqft", pd.Series(index=candidates.index)))
+    candidates["_priority_nbhd_component"] = _norm_series(_resolve_neighborhood_support_metric(candidates))
+
+    weights = priority_cfg.get("factor_weights", {})
+    ppsf_w = _safe_float(weights.get("price_per_sqft"), 0.40)
+    lot_w = _safe_float(weights.get("lot_size"), 0.25)
+    nbhd_w = _safe_float(weights.get("neighborhood_support"), 0.35)
+    candidates["priority_score"] = (
+        (ppsf_w * candidates["_priority_ppsf_component"])
+        + (lot_w * candidates["_priority_lot_component"])
+        + (nbhd_w * candidates["_priority_nbhd_component"])
+    )
+
+    coc_post_tax = pd.to_numeric(
+        candidates.get("coc_post_tax", pd.Series(index=candidates.index, dtype="float64")),
+        errors="coerce",
+    )
+    coc_pre_tax = pd.to_numeric(
+        candidates.get("coc_pre_tax", pd.Series(index=candidates.index, dtype="float64")),
+        errors="coerce",
+    )
+    coc_tie_break = coc_post_tax.fillna(coc_pre_tax).fillna(0.0)
+    candidates["_priority_coc_tie_break"] = coc_tie_break
+
+    candidates = candidates.sort_values(
+        by=["priority_score", "_priority_coc_tie_break", "property_id"],
+        ascending=[False, False, True],
+        kind="mergesort",
+    )
+    candidates["priority_rank"] = range(1, len(candidates) + 1)
+    candidates["priority_reason_summary"] = candidates.apply(_priority_reason, axis=1)
+
+    update_cols = ["priority_score", "priority_rank", "priority_reason_summary", "is_palm_springs_priority_candidate"]
+    for col in update_cols:
+        working.loc[candidate_mask, col] = candidates[col]
+    return working
+
+
 def evaluate_str_fit(df: pd.DataFrame, assumptions: dict[str, Any]) -> pd.DataFrame:
+    assumptions = _normalize_assumptions(assumptions)
     rows = df.copy()
     if "status" in rows.columns:
         rows = rows[rows["status"].astype(str).str.upper() == "FOR_SALE"].copy()
@@ -680,33 +1138,38 @@ def evaluate_str_fit(df: pd.DataFrame, assumptions: dict[str, Any]) -> pd.DataFr
         if sort_cols:
             rows = rows.sort_values(by=sort_cols, ascending=True, kind="mergesort")
         rows = rows.drop_duplicates(subset=["property_id"], keep="last").copy()
-
-    cap_eligible_zips, cap_status = _derive_cap_eligible_zip_codes(assumptions)
-    co_group_keys = _co_ownership_group_keys(rows)
-
-    scored_rows = [
-        _score_row(
-            row,
-            assumptions,
-            co_group_keys,
-            cap_eligible_zips=cap_eligible_zips,
-            cap_status=cap_status,
-        )
-        for _, row in rows.iterrows()
-    ]
-    scored_df = pd.DataFrame(scored_rows)
+    scored_df = _score_dataframe(rows, assumptions)
     if scored_df.empty:
         return scored_df
 
-    scored_df["cap_eligible_zip_set"] = ",".join(sorted(cap_eligible_zips)) if cap_eligible_zips else pd.NA
-    scored_df["cap_data_status"] = cap_status
+    queue_df = _build_pool_enrichment_queue(scored_df)
+    queue_df_stage1 = queue_df.copy()
+    enriched_rows = pd.DataFrame()
+    if assumptions.get("enrichment_workflow", {}).get("enabled", False) and not queue_df.empty:
+        enriched_rows = _fetch_enriched_pool_rows(queue_df, assumptions)
+        if not enriched_rows.empty:
+            rows = _apply_enrichment_updates(rows, enriched_rows)
+            scored_df = _score_dataframe(rows, assumptions)
+            queue_df = _build_pool_enrichment_queue(scored_df)
+
+    scored_df = _attach_pool_enrichment_status(scored_df, queue_df_stage1, enriched_rows)
 
     scored_df = _load_coc_scores(scored_df, assumptions)
     scored_df = _apply_shortlist(scored_df, assumptions)
+    scored_df = _apply_palm_springs_priority(scored_df, assumptions)
 
-    sort_cols = ["is_shortlist_candidate", "str_fit_pass", "str_fit_score", "property_id"]
-    ascending = [False, False, False, True]
-    return scored_df.sort_values(by=sort_cols, ascending=ascending, kind="mergesort").reset_index(drop=True)
+    scored_df["_priority_rank_num"] = pd.to_numeric(scored_df.get("priority_rank"), errors="coerce").fillna(10**9)
+    sort_cols = [
+        "is_palm_springs_priority_candidate",
+        "_priority_rank_num",
+        "is_shortlist_candidate",
+        "str_fit_pass",
+        "str_fit_score",
+        "property_id",
+    ]
+    ascending = [False, True, False, False, False, True]
+    scored_df = scored_df.sort_values(by=sort_cols, ascending=ascending, kind="mergesort").reset_index(drop=True)
+    return scored_df.drop(columns=["_priority_rank_num"])
 
 
 def assumptions_to_df(assumptions: dict[str, Any]) -> pd.DataFrame:
@@ -753,13 +1216,48 @@ def main() -> None:
     shortlist_count = int(
         scored_df.get("is_shortlist_candidate", pd.Series(dtype="bool")).fillna(False).astype(bool).sum()
     )
+    verified_count = int(
+        scored_df.get("private_pool_verified", pd.Series(dtype="bool")).fillna(False).astype(bool).sum()
+    )
+    known_false_count = int(
+        (
+            scored_df.get("is_private_pool_known", pd.Series(dtype="bool")).fillna(False).astype(bool)
+            & ~scored_df.get("is_private_pool", pd.Series(dtype="bool")).fillna(False).astype(bool)
+        ).sum()
+    )
+    community_only_count = int(
+        scored_df.get("pool_community_only", pd.Series(dtype="bool")).fillna(False).astype(bool).sum()
+    )
+    conflict_count = int(scored_df.get("pool_conflict", pd.Series(dtype="bool")).fillna(False).astype(bool).sum())
+    unknown_count = int(
+        (~scored_df.get("is_private_pool_known", pd.Series(dtype="bool")).fillna(False).astype(bool)).sum()
+    )
+    verified_coverage = (verified_count / len(scored_df)) if len(scored_df) else 0.0
+    pool_verification_cfg = assumptions.get("pool_verification", {})
+    min_verified_coverage_warn = float(pool_verification_cfg.get("min_verified_coverage_warn", 0.05))
+    fail_on_low_verified_coverage = bool(pool_verification_cfg.get("fail_on_low_verified_coverage", False))
+    coverage_line = (
+        f"Private pool verified rows: {verified_count} ({verified_coverage:.2%} coverage of for-sale evaluated rows)"
+    )
+    low_coverage_warn = verified_coverage < min_verified_coverage_warn
     print(
         f"Input rows: {len(df)}\n"
         f"For-sale evaluated rows: {len(scored_df)}\n"
         f"STR-fit pass rows (Stage 1): {fit_count}\n"
         f"Shortlist rows (Stage 2): {shortlist_count}\n"
+        f"{coverage_line}\n"
+        f"Pool state counts: private_pool_known_false={known_false_count}; "
+        f"community_only={community_only_count}; conflict={conflict_count}; unknown={unknown_count}\n"
         f"Output workbook: {Path(args.output).resolve()}"
     )
+    if low_coverage_warn:
+        warning = (
+            "[pool-verification-coverage-warning] "
+            f"Coverage {verified_coverage:.2%} is below configured threshold {min_verified_coverage_warn:.2%}."
+        )
+        print(warning)
+        if fail_on_low_verified_coverage:
+            raise RuntimeError(warning)
 
 
 if __name__ == "__main__":

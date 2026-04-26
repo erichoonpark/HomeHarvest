@@ -2,6 +2,7 @@
   "hard_gates": {
     "require_quality": true,
     "require_str_supported_neighborhood": true,
+    "require_private_pool": true,
     "require_price_range": true,
     "require_beds_baths": true,
     "require_location": true,
@@ -34,6 +35,29 @@
     "location": 5,
     "geo_cap_zip": 10,
     "pool_signal": 20
+  },
+  "pool_verification": {
+    "allow_high_conf_inferred_private": true,
+    "high_conf_levels": ["high"],
+    "min_verified_coverage_warn": 0.05,
+    "fail_on_low_verified_coverage": false
+  },
+  "enrichment_workflow": {
+    "enabled": true,
+    "listing_type": "for_sale",
+    "past_days": 365
+  },
+  "priority_ranking": {
+    "enabled": true,
+    "target_city": "Palm Springs",
+    "require_for_sale_status": true,
+    "require_str_fit_pass": true,
+    "factor_weights": {
+      "price_per_sqft": 0.4,
+      "lot_size": 0.25,
+      "neighborhood_support": 0.35
+    },
+    "tie_break_metrics": ["coc_post_tax", "coc_pre_tax", "property_id"]
   },
   "shortlist": {
     "enabled": true,

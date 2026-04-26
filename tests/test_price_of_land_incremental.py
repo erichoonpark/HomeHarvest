@@ -311,7 +311,7 @@ def test_enrich_and_enforce_required_baseline_fields():
                 "list_price": 500000,
                 "sqft": 2000,
                 "lot_sqft": 6500,
-                "pool_features": "private pool",
+                "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes"]}]',
             },
             {
                 "property_id": "missing_lot",
@@ -337,6 +337,7 @@ def test_enrich_and_enforce_required_baseline_fields():
     assert bool(kept["pool_available"]) is True
     assert bool(kept["is_private_pool"]) is True
     assert bool(kept["is_private_pool_known"]) is True
+    assert bool(kept["private_pool_verified"]) is True
 
 
 def test_extract_pool_mapping_uses_structured_details_private_yes():
@@ -354,6 +355,7 @@ def test_extract_pool_mapping_uses_structured_details_private_yes():
     assert bool(mapped["pool_available"]) is True
     assert bool(mapped["is_private_pool"]) is True
     assert bool(mapped["is_private_pool_known"]) is True
+    assert bool(mapped["private_pool_verified"]) is True
     assert mapped["pool_confidence"] == "high"
 
 
@@ -372,7 +374,39 @@ def test_extract_pool_mapping_uses_structured_details_private_no():
     assert bool(mapped["pool_available"]) is True
     assert bool(mapped["is_private_pool"]) is False
     assert bool(mapped["is_private_pool_known"]) is True
+    assert bool(mapped["private_pool_verified"]) is False
     assert mapped["pool_confidence"] == "high"
+
+
+def test_extract_pool_mapping_marks_conflict_as_not_verified():
+    pol = _load_price_of_land_module()
+    row = pd.Series(
+        {
+            "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes","Pool Private: No"]}]',
+            "raw_tags": '["swimming_pool"]',
+            "raw_photo_tags": '[{"labels":["swimming_pool"]}]',
+        }
+    )
+
+    mapped = pol._extract_pool_mapping(row)
+    assert bool(mapped["pool_conflict"]) is True
+    assert bool(mapped["private_pool_verified"]) is False
+    assert bool(mapped["is_private_pool_known"]) is True
+
+
+def test_extract_pool_mapping_fallback_private_text_not_auto_verified():
+    pol = _load_price_of_land_module()
+    row = pd.Series(
+        {
+            "pool_features": "private pool and spa",
+        }
+    )
+
+    mapped = pol._extract_pool_mapping(row)
+    assert bool(mapped["pool_available"]) is True
+    assert bool(mapped["private_pool_verified"]) is False
+    assert bool(mapped["is_private_pool_known"]) is False
+    assert mapped["pool_confidence"] in {"medium", "low"}
 
 
 def test_get_property_details_retains_baseline_alias_fields(monkeypatch):
@@ -427,3 +461,9 @@ def test_get_property_details_retains_baseline_alias_fields(monkeypatch):
     assert row["listing_description"] == "A beautiful single-family listing."
     assert row["hoa_fee"] == 365
     assert row["hoa_monthly_fee"] == 365
+    assert bool(row["private_pool_verified"]) is True
+    assert "raw_details" in out.columns
+    assert "raw_tags" in out.columns
+    assert "raw_photo_tags" in out.columns
+    assert "pool_evidence" in out.columns
+    assert "pool_signal_sources" in out.columns
