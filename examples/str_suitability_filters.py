@@ -32,11 +32,13 @@ CO_OWNERSHIP_KEYWORDS = (
 )
 UNIT_ADDRESS_TOKENS = ("unit", "apt", "apartment", "suite", "ste", "#", "lot", "space", "spc")
 POOL_KEYWORDS = (" pool ", "swimming pool", "spa", "hot tub", "plunge pool")
+POOL_PRIVATE_YES_KEYWORDS = ("pool private: yes", "private pool")
+POOL_PRIVATE_NO_KEYWORDS = ("pool private: no", "community pool", "community swimming pool", "shared pool")
 POOL_COLUMNS = (
     "is_private_pool",
     "is_private_pool_known",
-    "pool_type",
     "pool_available",
+    "pool_type",
     "pool",
     "has_pool",
     "has_pool_inferred",
@@ -48,6 +50,7 @@ POOL_COLUMNS = (
     "remarks",
     "features",
 )
+POOL_RAW_COLUMNS = ("raw_details", "raw_tags", "raw_photo_tags")
 
 MANUAL_EXCLUDED_PROPERTY_IDS = {
     "1086968872",  # 470 E Avenida Olancha, Palm Springs, CA 92264
@@ -178,24 +181,89 @@ def _is_manually_excluded_row(row: pd.Series) -> bool:
     return _address_key(row) in MANUAL_EXCLUDED_ADDRESSES
 
 
-def _infer_pool(row: pd.Series) -> tuple[bool, str]:
+def _parse_json_like_list(value: Any) -> list[Any]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _text_contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _infer_pool(row: pd.Series) -> tuple[bool, bool, str]:
+    generic_pool_source: str | None = None
+
+    for column in POOL_RAW_COLUMNS:
+        if column not in row.index:
+            continue
+
+        raw_values = _parse_json_like_list(row.get(column))
+        for raw in raw_values:
+            if isinstance(raw, dict):
+                normalized = f" {json.dumps(raw, ensure_ascii=False).strip().lower()} "
+            else:
+                normalized = f" {_safe_str(raw).strip().lower()} "
+            if not normalized.strip():
+                continue
+            if _text_contains_any(normalized, POOL_PRIVATE_YES_KEYWORDS):
+                return True, True, column
+            if _text_contains_any(normalized, POOL_PRIVATE_NO_KEYWORDS):
+                return False, True, column
+            if _text_contains_any(normalized, POOL_KEYWORDS):
+                generic_pool_source = generic_pool_source or column
+
     for column in POOL_COLUMNS:
         if column not in row.index:
             continue
         value = row.get(column)
+        if column == "is_private_pool":
+            known_value = _safe_bool(row.get("is_private_pool_known")) if "is_private_pool_known" in row.index else False
+            return _safe_bool(value), bool(known_value), "is_private_pool"
+        if column == "is_private_pool_known":
+            continue
+        if column == "pool_available":
+            available = _safe_bool(value)
+            if available:
+                generic_pool_source = generic_pool_source or column
+            continue
         if isinstance(value, bool):
-            return value, column
+            if column in {"private_pool", "pool_private"}:
+                return value, True, column
+            if value:
+                generic_pool_source = generic_pool_source or column
+            continue
         if isinstance(value, (int, float)) and pd.notna(value):
-            return bool(value > 0), column
+            if value > 0:
+                generic_pool_source = generic_pool_source or column
+            continue
         text = f" {_safe_str(value).strip().lower()} "
-        if any(keyword in text for keyword in POOL_KEYWORDS):
-            return True, column
+        if _text_contains_any(text, POOL_PRIVATE_YES_KEYWORDS):
+            return True, True, column
+        if _text_contains_any(text, POOL_PRIVATE_NO_KEYWORDS):
+            return False, True, column
+        if _text_contains_any(text, POOL_KEYWORDS):
+            generic_pool_source = generic_pool_source or column
 
     for column in ("street", "property_url", "neighborhoods"):
         text = f" {_safe_str(row.get(column)).strip().lower()} "
-        if any(keyword in text for keyword in POOL_KEYWORDS):
-            return True, column
-    return False, "none"
+        if _text_contains_any(text, POOL_KEYWORDS):
+            generic_pool_source = generic_pool_source or column
+
+    if generic_pool_source:
+        return False, False, generic_pool_source
+    return False, False, "none"
 
 
 def _resolve_private_pool(row: pd.Series, assumptions: dict[str, Any]) -> tuple[bool, bool, str]:
@@ -207,9 +275,7 @@ def _resolve_private_pool(row: pd.Series, assumptions: dict[str, Any]) -> tuple[
         is_private_pool_known = _safe_bool(row.get("is_private_pool_known"))
         source = "canonical"
     else:
-        has_pool, source = _infer_pool(row)
-        is_private_pool = has_pool
-        is_private_pool_known = False
+        is_private_pool, is_private_pool_known, source = _infer_pool(row)
 
     if exclude_unknown and not is_private_pool_known:
         return False, is_private_pool_known, f"{source}:unknown_private_pool"

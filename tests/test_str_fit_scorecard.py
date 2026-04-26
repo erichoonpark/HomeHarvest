@@ -164,3 +164,36 @@ def test_unknown_private_pool_excluded_by_default():
     row = scored.iloc[0]
     assert bool(row["eligible_pool"]) is False
     assert bool(row["str_fit_pass"]) is False
+
+
+def test_private_pool_inferred_from_raw_details_without_canonical_columns():
+    module = _load_module()
+    assumptions = _assumptions()
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "RAW_PRIVATE",
+                "status": "FOR_SALE",
+                "street": "400 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 980000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 2100,
+                "str_nbhd_under_cap_current": 1,
+                "property_url": "https://example.com/raw-private",
+                "raw_details": '[{"category":"Exterior","text":["Pool private: yes"]}]',
+            }
+        ]
+    )
+
+    scored = module.evaluate_str_fit(df, assumptions)
+    row = scored.iloc[0]
+
+    assert bool(row["eligible_pool"]) is True
+    assert bool(row["is_private_pool"]) is True
+    assert bool(row["is_private_pool_known"]) is True
+    assert bool(row["str_fit_pass"]) is True
