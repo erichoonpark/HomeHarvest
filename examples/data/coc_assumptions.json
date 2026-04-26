@@ -21,6 +21,43 @@
   "scenario_routing": {
     "luxury_price_threshold": 2000000
   },
+  "adr_engine": {
+    "base_adr_market": 430,
+    "pool_multiplier": 1.12,
+    "renovation_multiplier": 1.08,
+    "bedroom_multipliers": {
+      "1": 0.75,
+      "2": 0.9,
+      "3": 1.0,
+      "4": 1.15,
+      "5+": 1.3
+    },
+    "luxury_uplift_pct": 0.35
+  },
+  "contract_policy": {
+    "annual_bookable_nights": 365,
+    "max_str_bookings_per_year": 26,
+    "avg_stay_nights_per_booking": 4
+  },
+  "mtr": {
+    "mtr_adr_multiplier": 0.55,
+    "mtr_occupancy": 0.72
+  },
+  "heloc": {
+    "enabled": true,
+    "interest_only": true,
+    "rate_annual": 0.085,
+    "draw_strategy": "down_payment_and_closing"
+  },
+  "tax": {
+    "effective_combined_tax_rate": 0.37,
+    "analysis_year": 1,
+    "building_allocation_pct": 0.8,
+    "standard_recovery_years": 27.5,
+    "cost_seg_start_year": 2,
+    "cost_seg_bonus_pct": 0.2
+  },
+  "ranking_metric": "coc_post_tax",
   "scenario_presets": {
     "palm_springs_normal": {
       "low": { "adr": 340, "occupancy_rate": 0.52 },

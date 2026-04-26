@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 
-def _load_price_of_land_module():
+def _load_scrape_listings_module():
     repo_root = Path(__file__).resolve().parents[1]
     module_path = repo_root / "examples" / "scrape_listings_core.py"
     examples_dir = str(module_path.parent)
@@ -23,35 +23,35 @@ def _load_price_of_land_module():
 
 
 def test_compute_previous_day_window():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
-    start, end = pol.compute_previous_day_window(run_date=pd.Timestamp("2026-04-24").date())
+    start, end = scrape_module.compute_previous_day_window(run_date=pd.Timestamp("2026-04-24").date())
 
     assert start.isoformat() == "2026-04-23T00:00:00-07:00"
     assert end.isoformat() == "2026-04-23T23:59:59-07:00"
 
 
 def test_compute_recent_window_lookback_three_days():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
-    start, end = pol.compute_recent_window(run_date=pd.Timestamp("2026-04-24").date(), lookback_days=3)
+    start, end = scrape_module.compute_recent_window(run_date=pd.Timestamp("2026-04-24").date(), lookback_days=3)
 
     assert start.isoformat() == "2026-04-21T00:00:00-07:00"
     assert end.isoformat() == "2026-04-23T23:59:59-07:00"
 
 
 def test_resolve_window_from_args_override_dates():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
     args = SimpleNamespace(run_date=None, date_from="2026-04-20", date_to="2026-04-21", lookback_days=3)
-    start, end = pol.resolve_window_from_args(args)
+    start, end = scrape_module.resolve_window_from_args(args)
 
     assert start.isoformat() == "2026-04-20T00:00:00-07:00"
     assert end.isoformat() == "2026-04-21T23:59:59-07:00"
 
 
 def test_dedupe_batch_by_property_id_deterministic_order():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
     batch = pd.DataFrame(
         [
@@ -82,7 +82,7 @@ def test_dedupe_batch_by_property_id_deterministic_order():
         ]
     )
 
-    deduped = pol.dedupe_batch_by_property_id(batch)
+    deduped = scrape_module.dedupe_batch_by_property_id(batch)
 
     assert len(deduped) == 2
 
@@ -94,7 +94,7 @@ def test_dedupe_batch_by_property_id_deterministic_order():
 
 
 def test_filter_new_property_rows_excludes_existing_ids():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
     existing = pd.DataFrame([{"property_id": "111"}, {"property_id": "333"}])
     deduped_batch = pd.DataFrame(
@@ -104,14 +104,14 @@ def test_filter_new_property_rows_excludes_existing_ids():
         ]
     )
 
-    new_rows = pol.filter_new_property_rows(existing, deduped_batch)
+    new_rows = scrape_module.filter_new_property_rows(existing, deduped_batch)
 
     assert len(new_rows) == 1
     assert new_rows.iloc[0]["property_id"] == "222"
 
 
 def test_filter_new_property_rows_bootstrap_empty_existing():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
     existing = pd.DataFrame()
     deduped_batch = pd.DataFrame(
@@ -121,14 +121,14 @@ def test_filter_new_property_rows_bootstrap_empty_existing():
         ]
     )
 
-    new_rows = pol.filter_new_property_rows(existing, deduped_batch)
+    new_rows = scrape_module.filter_new_property_rows(existing, deduped_batch)
 
     assert len(new_rows) == 2
     assert set(new_rows["property_id"].tolist()) == {"111", "222"}
 
 
 def test_summarize_incremental_batch_reports_overlap():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
     existing = pd.DataFrame([{"property_id": "111"}, {"property_id": "333"}])
     fetched = pd.DataFrame(
@@ -140,7 +140,7 @@ def test_summarize_incremental_batch_reports_overlap():
     deduped = fetched.copy()
     new_rows = pd.DataFrame([{"property_id": "222", "status": "FOR_SALE"}])
 
-    summary = pol.summarize_incremental_batch(existing, fetched, deduped, new_rows)
+    summary = scrape_module.summarize_incremental_batch(existing, fetched, deduped, new_rows)
 
     assert summary["fetched_rows"] == 2
     assert summary["deduped_rows"] == 2
@@ -149,7 +149,7 @@ def test_summarize_incremental_batch_reports_overlap():
 
 
 def test_apply_incremental_upserts_updates_status_and_appends_new():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
     existing = pd.DataFrame(
         [
@@ -175,7 +175,7 @@ def test_apply_incremental_upserts_updates_status_and_appends_new():
         ]
     )
 
-    combined, new_rows, updated_count, unchanged_count = pol.apply_incremental_upserts(
+    combined, new_rows, updated_count, unchanged_count = scrape_module.apply_incremental_upserts(
         existing,
         deduped_batch,
         batch_run_at="2026-04-24T08:00:00-07:00",
@@ -202,8 +202,50 @@ def test_apply_incremental_upserts_updates_status_and_appends_new():
     assert appended_row["is_status_updated_in_batch"] is False
 
 
+def test_apply_incremental_upserts_refreshes_same_status_when_fields_change():
+    scrape_module = _load_scrape_listings_module()
+
+    existing = pd.DataFrame(
+        [
+            {
+                "property_id": "111",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "list_price": 500000,
+            }
+        ]
+    )
+    deduped_batch = pd.DataFrame(
+        [
+            {
+                "property_id": "111",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "list_price": 525000,
+            }
+        ]
+    )
+
+    combined, new_rows, updated_count, unchanged_count = scrape_module.apply_incremental_upserts(
+        existing,
+        deduped_batch,
+        batch_run_at="2026-04-24T08:00:00-07:00",
+        batch_window_start="2026-04-21T00:00:00-07:00",
+        batch_window_end="2026-04-23T23:59:59-07:00",
+    )
+
+    assert updated_count == 0
+    assert unchanged_count == 0
+    assert new_rows.empty
+
+    refreshed_row = combined[combined["property_id"] == "111"].iloc[0]
+    assert refreshed_row["status"] == "FOR_SALE"
+    assert refreshed_row["list_price"] == 525000
+    assert refreshed_row["is_status_updated_in_batch"] is False
+
+
 def test_filter_home_listings_excludes_mobile_like_and_invalid_rows():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
     rows = pd.DataFrame(
         [
@@ -255,12 +297,12 @@ def test_filter_home_listings_excludes_mobile_like_and_invalid_rows():
         ]
     )
 
-    filtered = pol.filter_home_listings(rows)
+    filtered = scrape_module.filter_home_listings(rows)
     assert set(filtered["property_id"]) == {"ok1"}
 
 
 def test_filter_home_listings_excludes_manual_co_ownership_address():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
     rows = pd.DataFrame(
         [
@@ -291,12 +333,12 @@ def test_filter_home_listings_excludes_manual_co_ownership_address():
         ]
     )
 
-    filtered = pol.filter_home_listings(rows)
+    filtered = scrape_module.filter_home_listings(rows)
     assert set(filtered["property_id"]) == {"ok2"}
 
 
 def test_enrich_and_enforce_required_baseline_fields():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
 
     rows = pd.DataFrame(
         [
@@ -311,7 +353,7 @@ def test_enrich_and_enforce_required_baseline_fields():
                 "list_price": 500000,
                 "sqft": 2000,
                 "lot_sqft": 6500,
-                "pool_features": "private pool",
+                "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes"]}]',
             },
             {
                 "property_id": "missing_lot",
@@ -329,7 +371,7 @@ def test_enrich_and_enforce_required_baseline_fields():
         ]
     )
 
-    out = pol.enrich_and_enforce_required_baseline_fields(rows, zip_code="92262", listing_type="for_sale")
+    out = scrape_module.enrich_and_enforce_required_baseline_fields(rows, zip_code="92262", listing_type="for_sale")
     assert set(out["property_id"]) == {"ok1"}
     kept = out.iloc[0]
     assert round(float(kept["price_per_sqft"]), 2) == 250.0
@@ -337,10 +379,11 @@ def test_enrich_and_enforce_required_baseline_fields():
     assert bool(kept["pool_available"]) is True
     assert bool(kept["is_private_pool"]) is True
     assert bool(kept["is_private_pool_known"]) is True
+    assert bool(kept["private_pool_verified"]) is True
 
 
 def test_extract_pool_mapping_uses_structured_details_private_yes():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
     row = pd.Series(
         {
             "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes","Pool Features: In Ground, Private"]}]',
@@ -349,16 +392,17 @@ def test_extract_pool_mapping_uses_structured_details_private_yes():
         }
     )
 
-    mapped = pol._extract_pool_mapping(row)
+    mapped = scrape_module._extract_pool_mapping(row)
     assert mapped["pool_type"] in {"private", "both"}
     assert bool(mapped["pool_available"]) is True
     assert bool(mapped["is_private_pool"]) is True
     assert bool(mapped["is_private_pool_known"]) is True
+    assert bool(mapped["private_pool_verified"]) is True
     assert mapped["pool_confidence"] == "high"
 
 
 def test_extract_pool_mapping_uses_structured_details_private_no():
-    pol = _load_price_of_land_module()
+    scrape_module = _load_scrape_listings_module()
     row = pd.Series(
         {
             "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: No","Pool Features: Community"]}]',
@@ -367,9 +411,101 @@ def test_extract_pool_mapping_uses_structured_details_private_no():
         }
     )
 
-    mapped = pol._extract_pool_mapping(row)
+    mapped = scrape_module._extract_pool_mapping(row)
     assert mapped["pool_type"] in {"community", "unknown"}
     assert bool(mapped["pool_available"]) is True
     assert bool(mapped["is_private_pool"]) is False
     assert bool(mapped["is_private_pool_known"]) is True
+    assert bool(mapped["private_pool_verified"]) is False
     assert mapped["pool_confidence"] == "high"
+
+
+def test_extract_pool_mapping_marks_conflict_as_not_verified():
+    scrape_module = _load_scrape_listings_module()
+    row = pd.Series(
+        {
+            "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes","Pool Private: No"]}]',
+            "raw_tags": '["swimming_pool"]',
+            "raw_photo_tags": '[{"labels":["swimming_pool"]}]',
+        }
+    )
+
+    mapped = scrape_module._extract_pool_mapping(row)
+    assert bool(mapped["pool_conflict"]) is True
+    assert bool(mapped["private_pool_verified"]) is False
+    assert bool(mapped["is_private_pool_known"]) is True
+
+
+def test_extract_pool_mapping_fallback_private_text_not_auto_verified():
+    scrape_module = _load_scrape_listings_module()
+    row = pd.Series(
+        {
+            "pool_features": "private pool and spa",
+        }
+    )
+
+    mapped = scrape_module._extract_pool_mapping(row)
+    assert bool(mapped["pool_available"]) is True
+    assert bool(mapped["private_pool_verified"]) is False
+    assert bool(mapped["is_private_pool_known"]) is False
+    assert mapped["pool_confidence"] in {"medium", "low"}
+
+
+def test_get_property_details_retains_baseline_alias_fields(monkeypatch):
+    scrape_module = _load_scrape_listings_module()
+
+    fake = pd.DataFrame(
+        [
+            {
+                "property_url": "https://example.com/home/1",
+                "property_id": "abc123",
+                "style": "SINGLE_FAMILY",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "county": "Riverside",
+                "neighborhoods": "Baristo",
+                "latitude": 33.8,
+                "longitude": -116.5,
+                "beds": 3,
+                "full_baths": 2,
+                "half_baths": 0,
+                "sqft": 1800,
+                "year_built": 1990,
+                "days_on_mls": 2,
+                "list_date": "2026-04-23 08:00:00",
+                "last_sold_date": None,
+                "list_price": 550000,
+                "sold_price": None,
+                "price_per_sqft": 100.0,
+                "lot_sqft": 8712,
+                "lot_size_sqft": 8712,
+                "text": "A beautiful single-family listing.",
+                "listing_description": "A beautiful single-family listing.",
+                "hoa_fee": 365,
+                "hoa_monthly_fee": 365,
+                "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes"]}]',
+                "raw_tags": '["swimming_pool"]',
+                "raw_photo_tags": '[{"labels":["swimming_pool"]}]',
+            }
+        ]
+    )
+
+    monkeypatch.setattr(scrape_module, "scrape_property", lambda **kwargs: fake.copy())
+    out = scrape_module.get_property_details("92262", "for_sale", past_days=30)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["lot_sqft"] == 8712
+    assert row["lot_size_sqft"] == 8712
+    assert row["text"] == "A beautiful single-family listing."
+    assert row["listing_description"] == "A beautiful single-family listing."
+    assert row["hoa_fee"] == 365
+    assert row["hoa_monthly_fee"] == 365
+    assert bool(row["private_pool_verified"]) is True
+    assert "raw_details" in out.columns
+    assert "raw_tags" in out.columns
+    assert "raw_photo_tags" in out.columns
+    assert "pool_evidence" in out.columns
+    assert "pool_signal_sources" in out.columns
