@@ -164,48 +164,41 @@ def test_render_dashboard_html_contains_expected_sections():
     payload = module.build_dashboard_payload(_sample_scored_df(), top_n=2, homes_limit=2)
     html = module.render_dashboard_html(payload)
 
+    assert "Coachella Valley STR Review Queue" in html
     assert "Total Ingested" in html
     assert "STR Fit Passed" in html
-    assert "Top STR-Passing Properties by COC Return" in html
+    assert "Priority Candidates" in html
+    assert "Top Priority Score" in html
+    assert "Best Property Ranking for STR Review" in html
+    assert "Rank" in html
     assert "Property ID" in html
     assert "Address" in html
+    assert "Priority Score" in html
+    assert "List Price" in html
     assert "Price / Sq Ft" in html
-    assert "Sq Ft" in html
     assert "Lot Size" in html
     assert "Bedrooms" in html
     assert "Bathrooms" in html
-    assert "Assumed ADR Rate" in html
-    assert "STR Potential" in html
-    assert "Investment Metrics" in html
     assert "Pre-Tax COC" in html
     assert "Post-Tax COC" in html
-    assert "Monthly Payment" in html
-    assert "Cash Needed" in html
-    assert "Annual Cash Flow (Med)" in html
-    assert "DSCR" in html
-    assert "<th>Scenario Tier</th>" not in html
+    assert "Reason" in html
+    assert "What You Pay" in html
+    assert "Expected Return" in html
+    assert "Ranking Driver" in html
+    assert "AI Property Insight" in html
     assert "View Listing" in html
-    assert 'target="_blank"' in html
-    assert "Potential:" in html
-    assert "Risk:" in html
+    assert 'target="_blank"' not in html
     assert "STR Filter Snapshot" in html
-    assert "Luxury STR Value Under $1.5M" in html
-    assert "Palm Springs Priority List" in html
-    assert "Pool Verification Watchlist" in html
-    assert "Luxury STR Opportunities" in html
-    assert "palm_springs_luxury" in html
-    assert html.index("STR Filter Snapshot") < html.index("Pool Verification Watchlist")
-    assert html.index("Palm Springs Priority List") < html.index("Pool Verification Watchlist")
-    assert html.index("Pool Verification Watchlist") < html.index("Luxury STR Opportunities")
-    assert html.index("Luxury STR Value Under $1.5M") < html.index("Luxury STR Opportunities")
-    assert html.index("Luxury STR Opportunities") < html.index("Top STR-Passing Properties by COC Return")
-    assert ".tablecard-main { grid-column: span 12; }" in html
-    assert ".tablecard-lux { grid-column: span 12; }" in html
-    assert "Home Breakdown with ADR + Occupancy Sliders" in html
+    assert "<table" not in html
+    assert "top5-potential-body" not in html
+    assert "pool-watchlist-body" not in html
+    assert "home-select" not in html
+    assert "Home Breakdown with ADR + Occupancy Sliders" not in html
+    assert "Luxury STR Opportunities" not in html
     assert "payload" in html
 
 
-def test_palm_springs_priority_widget_orders_by_rank_and_score():
+def test_palm_springs_priority_widget_orders_by_pre_tax_coc():
     module = _load_module()
     rows = [
         {
@@ -219,6 +212,7 @@ def test_palm_springs_priority_widget_orders_by_rank_and_score():
             "sqft": 2000,
             "property_url": "https://example.com/ps3",
             "coc_post_tax": 0.05,
+            "coc_pre_tax": 0.11,
             "str_fit_score": 90,
             "str_fit_pass": True,
             "is_palm_springs_priority_candidate": True,
@@ -237,6 +231,7 @@ def test_palm_springs_priority_widget_orders_by_rank_and_score():
             "sqft": 1900,
             "property_url": "https://example.com/ps1",
             "coc_post_tax": 0.09,
+            "coc_pre_tax": 0.04,
             "str_fit_score": 92,
             "str_fit_pass": True,
             "is_palm_springs_priority_candidate": True,
@@ -262,20 +257,19 @@ def test_palm_springs_priority_widget_orders_by_rank_and_score():
     ]
     payload = module.build_dashboard_payload(pd.DataFrame(rows), top_n=10, homes_limit=10)
     priority_ids = [row["property_id"] for row in payload["top_properties_palm_springs_priority"]]
-    assert priority_ids == ["PS1", "PS3"]
+    assert priority_ids == ["PS3", "PS1"]
     assert payload["total_palm_springs_priority_candidates"] == 2
 
 
-def test_render_dashboard_html_dscr_fallback_na():
+def test_render_dashboard_html_removes_legacy_modules():
     module = _load_module()
-    df = _sample_scored_df().copy()
-    if "dscr" in df.columns:
-        df = df.drop(columns=["dscr"])
-    payload = module.build_dashboard_payload(df, top_n=2, homes_limit=2)
+    payload = module.build_dashboard_payload(_sample_scored_df(), top_n=2, homes_limit=2)
     html = module.render_dashboard_html(payload)
 
-    assert "DSCR" in html
-    assert "N/A" in html
+    assert "Pool Verification Watchlist" not in html
+    assert "Luxury STR Value Under $1.5M" not in html
+    assert "Top STR-Passing Properties by COC Return" not in html
+    assert "renderPalmSpringsPriority" not in html
 
 
 def test_default_top_n_is_10():
@@ -457,9 +451,8 @@ def test_luxury_widget_filters_and_orders_with_max_five():
     payload = module.build_dashboard_payload(df, top_n=5, homes_limit=20)
     luxury_ids = [row["property_id"] for row in payload["top_properties_luxury"]]
 
-    assert payload["total_luxury_candidates"] == 7
-    assert len(luxury_ids) == 5
-    assert luxury_ids == ["L0", "L1", "L2", "L3", "L4"]
+    assert payload["total_luxury_candidates"] == 0
+    assert len(luxury_ids) == 0
     assert "N0" not in luxury_ids
     assert "L_FAIL" not in luxury_ids
 
@@ -474,7 +467,7 @@ def test_luxury_widget_empty_state_renders():
 
     assert payload["total_luxury_candidates"] == 0
     assert payload["top_properties_luxury"] == []
-    assert "No luxury STR-fit properties available in current dataset." in html
+    assert "Luxury STR Opportunities" not in html
 
 
 def test_budget_luxury_value_widget_filters_orders_and_caps_to_30():
@@ -572,7 +565,7 @@ def test_budget_luxury_value_widget_empty_state_renders():
 
     assert payload["top_properties_luxury_value_budget"] == []
     assert payload["total_luxury_value_budget_candidates"] == 0
-    assert "No STR-fit luxury-value properties under $1.5M in current dataset." in html
+    assert "Luxury STR Value Under $1.5M" not in html
 
 
 def test_pool_watchlist_empty_state_renders():
@@ -586,4 +579,56 @@ def test_pool_watchlist_empty_state_renders():
 
     assert payload["pool_verification_watchlist"] == []
     assert payload["total_pool_unknown_candidates"] == 0
-    assert "No unresolved pool-verification candidates in current dataset." in html
+    assert "Pool Verification Watchlist" not in html
+
+
+def test_excluded_coownership_listing_is_hard_removed():
+    module = _load_module()
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "2310318356",
+                "status": "FOR_SALE",
+                "street": "1961 S Palm Canyon Dr",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92264",
+                "list_price": 299000,
+                "sqft": 2728,
+                "str_fit_pass": True,
+                "str_fit_score": 110,
+                "coc_post_tax": 0.29,
+                "is_palm_springs_priority_candidate": True,
+                "priority_rank": 1,
+                "priority_score": 0.99,
+                "priority_reason_summary": "Excluded co-ownership test row.",
+            },
+            {
+                "property_id": "SAFE1",
+                "status": "FOR_SALE",
+                "street": "123 Safe St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92264",
+                "list_price": 800000,
+                "sqft": 2000,
+                "str_fit_pass": True,
+                "str_fit_score": 100,
+                "coc_post_tax": 0.08,
+                "is_palm_springs_priority_candidate": True,
+                "priority_rank": 2,
+                "priority_score": 0.70,
+                "priority_reason_summary": "Safe retained row.",
+            },
+        ]
+    )
+
+    payload = module.build_dashboard_payload(df, top_n=10, homes_limit=10)
+
+    assert payload["total_ingested"] == 1
+    assert payload["total_str_fit_passed"] == 1
+    top_ids = [row["property_id"] for row in payload["top_properties"]]
+    priority_ids = [row["property_id"] for row in payload["top_properties_palm_springs_priority"]]
+    assert "2310318356" not in top_ids
+    assert "2310318356" not in priority_ids
+    assert top_ids == ["SAFE1"]
