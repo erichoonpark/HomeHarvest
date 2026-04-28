@@ -9,6 +9,7 @@ import pandas as pd
 
 DEFAULT_INPUT_PATH = Path("examples/zips/coc_scorecard.xlsx")
 DEFAULT_OUTPUT_PATH = Path("examples/zips/coc_dashboard.html")
+DEFAULT_HEALTH_REPORT_PATH = Path("examples/zips/incremental_health_report.json")
 BUDGET_LUXURY_MAX_PRICE = 1_500_000.0
 BUDGET_LUXURY_TOP_N = 30
 DASHBOARD_MAX_LIST_PRICE = 1_500_000.0
@@ -22,6 +23,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH), help="Output dashboard HTML path")
     parser.add_argument("--top-n", type=int, default=10, help="Top N rows to display in COC table")
     parser.add_argument("--homes-limit", type=int, default=100, help="Max homes loaded in interactive breakdown")
+    parser.add_argument(
+        "--health-report-input",
+        default=str(DEFAULT_HEALTH_REPORT_PATH),
+        help="Optional incremental health report JSON used for KPI metadata.",
+    )
     return parser.parse_args()
 
 
@@ -451,7 +457,26 @@ def _palm_springs_priority_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, 
     return rows
 
 
-def build_dashboard_payload(scored_df: pd.DataFrame, *, top_n: int = 10, homes_limit: int = 100) -> dict[str, Any]:
+def _load_incremental_health_report(path: str | Path) -> dict[str, Any]:
+    report_path = Path(path)
+    if not report_path.exists():
+        return {}
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def build_dashboard_payload(
+    scored_df: pd.DataFrame,
+    *,
+    top_n: int = 10,
+    homes_limit: int = 100,
+    health_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     scored = scored_df.copy()
     if not scored.empty:
         scored = scored.loc[~scored.apply(_is_excluded_listing, axis=1)].copy()
@@ -523,9 +548,19 @@ def build_dashboard_payload(scored_df: pd.DataFrame, *, top_n: int = 10, homes_l
     )
     top_priority_score = _safe_float(priority_rows[0].get("priority_score")) if priority_rows else 0.0
 
+    if health_report is None:
+        health_report = {}
+    summary = health_report.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+    new_listings_today = int(_safe_float(summary.get("new_rows"), 0.0))
+    listings_pulled_at = _safe_str(health_report.get("batch_run_at")).strip() or None
+
     return {
         "total_ingested": int(len(scored)),
         "total_str_fit_passed": int(len(fit)),
+        "new_listings_today": new_listings_today,
+        "listings_pulled_at": listings_pulled_at,
         "top_properties": top_fit,
         "top_properties_luxury": top_luxury,
         "top_properties_palm_springs_priority": priority_rows,
@@ -614,7 +649,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     .subline { margin: 8px 0 0; color: #cbd5e1; font-size: 14px; }
     .kpis {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 12px;
       margin-bottom: 14px;
     }
@@ -626,7 +661,6 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     }
     .kpi .k { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
     .kpi .v { margin: 6px 0 0; font-size: 32px; font-weight: 800; color: var(--accent); line-height: 1; }
-    .kpi .v.score { color: var(--score); }
     .kpi .s { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
     .module {
       background: var(--card);
@@ -797,7 +831,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     </section>
     <section class="kpis">
       <article class="kpi">
-        <p class="k">Total Ingested</p>
+        <p class="k">Total Listings</p>
         <p id="total-ingested" class="v">0</p>
         <p class="s">For-sale records scored</p>
       </article>
@@ -807,14 +841,9 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         <p class="s">Passed suitability filters</p>
       </article>
       <article class="kpi">
-        <p class="k">Priority Candidates</p>
-        <p id="priority-candidates" class="v">0</p>
-        <p class="s">Eligible for ranking</p>
-      </article>
-      <article class="kpi">
-        <p class="k">Top Priority Score</p>
-        <p id="priority-top-score" class="v score">0.0</p>
-        <p class="s">100-point scale</p>
+        <p class="k">New Listings Added Today</p>
+        <p id="new-listings-today" class="v">0</p>
+        <p id="listings-pulled-at" class="s">Last pull: unavailable</p>
       </article>
     </section>
     <section class="module">
@@ -833,6 +862,23 @@ const payload = __PAYLOAD_JSON__;
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (v) => `${(Number(v || 0) * 100).toFixed(2)}%`;
 const score100 = (v) => (Number(v || 0) * 100).toFixed(1);
+const pullTimestampFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Los_Angeles',
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  second: '2-digit',
+  timeZoneName: 'short',
+});
+
+function formatPullTimestamp(rawValue) {
+  if (!rawValue) return 'Last pull: unavailable';
+  const parsed = new Date(rawValue);
+  if (Number.isNaN(parsed.getTime())) return 'Last pull: unavailable';
+  return `Last pull: ${pullTimestampFormatter.format(parsed)}`;
+}
 
 function renderPriorityRanking() {
   const container = document.getElementById('ranking-list');
@@ -901,8 +947,8 @@ function renderPriorityRanking() {
 function init() {
   document.getElementById('total-ingested').textContent = String(payload.total_ingested || 0);
   document.getElementById('total-fit').textContent = String(payload.total_str_fit_passed || 0);
-  document.getElementById('priority-candidates').textContent = String(payload.total_palm_springs_priority_candidates || 0);
-  document.getElementById('priority-top-score').textContent = score100(payload.top_priority_score);
+  document.getElementById('new-listings-today').textContent = String(payload.new_listings_today || 0);
+  document.getElementById('listings-pulled-at').textContent = formatPullTimestamp(payload.listings_pulled_at);
   document.getElementById('priority-note').textContent = payload.priority_ranking_note || '';
 
   const snapshot = document.getElementById('filter-snapshot');
@@ -934,7 +980,13 @@ def write_dashboard_html(payload: dict[str, Any], output_path: str | Path) -> No
 def main() -> None:
     args = parse_args()
     scored_df = load_scored_data(args.input)
-    payload = build_dashboard_payload(scored_df, top_n=args.top_n, homes_limit=args.homes_limit)
+    health_report = _load_incremental_health_report(args.health_report_input)
+    payload = build_dashboard_payload(
+        scored_df,
+        top_n=args.top_n,
+        homes_limit=args.homes_limit,
+        health_report=health_report,
+    )
     write_dashboard_html(payload, args.output)
     print(
         f"Input scored rows: {len(scored_df)}\n"

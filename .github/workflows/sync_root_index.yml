@@ -4,13 +4,6 @@ on:
   push:
     branches:
       - master
-    paths:
-      - "scripts/build_dashboard_publish.sh"
-      - "examples/coc_dashboard.py"
-      - "examples/zips/coc_scorecard.xlsx"
-      - "pyproject.toml"
-      - "poetry.lock"
-      - ".github/workflows/sync_root_index.yml"
   workflow_dispatch:
 
 permissions:

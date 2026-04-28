@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -165,10 +166,11 @@ def test_render_dashboard_html_contains_expected_sections():
     html = module.render_dashboard_html(payload)
 
     assert "Coachella Valley STR Review Queue" in html
-    assert "Total Ingested" in html
+    assert "Total Listings" in html
     assert "STR Fit Passed" in html
-    assert "Priority Candidates" in html
-    assert "Top Priority Score" in html
+    assert "New Listings Added Today" in html
+    assert "Priority Candidates" not in html
+    assert "Top Priority Score" not in html
     assert "Best Property Ranking for STR Review" in html
     assert "Rank" in html
     assert "Property ID" in html
@@ -311,6 +313,61 @@ def test_write_dashboard_html_creates_file(tmp_path: Path):
     assert out.exists()
     text = out.read_text(encoding="utf-8")
     assert "COC Dashboard" in text
+
+
+def test_build_dashboard_payload_includes_health_report_kpis():
+    module = _load_module()
+    health_report = {
+        "batch_run_at": "2026-04-28T08:15:00-07:00",
+        "summary": {"new_rows": 14},
+    }
+
+    payload = module.build_dashboard_payload(_sample_scored_df(), top_n=1, homes_limit=2, health_report=health_report)
+
+    assert payload["new_listings_today"] == 14
+    assert payload["listings_pulled_at"] == "2026-04-28T08:15:00-07:00"
+
+
+def test_build_dashboard_payload_missing_health_report_defaults():
+    module = _load_module()
+    payload = module.build_dashboard_payload(_sample_scored_df(), top_n=1, homes_limit=2, health_report={})
+
+    assert payload["new_listings_today"] == 0
+    assert payload["listings_pulled_at"] is None
+
+
+def test_load_incremental_health_report_handles_missing_and_invalid(tmp_path: Path):
+    module = _load_module()
+    missing = tmp_path / "missing.json"
+    assert module._load_incremental_health_report(missing) == {}
+
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not-json", encoding="utf-8")
+    assert module._load_incremental_health_report(bad) == {}
+
+    ok = tmp_path / "ok.json"
+    ok.write_text(
+        json.dumps({"batch_run_at": "2026-04-28T07:00:00-07:00", "summary": {"new_rows": 3}}), encoding="utf-8"
+    )
+    loaded = module._load_incremental_health_report(ok)
+    assert loaded["summary"]["new_rows"] == 3
+
+
+def test_render_dashboard_html_wires_new_kpi_dom_ids():
+    module = _load_module()
+    health_report = {
+        "batch_run_at": "2026-04-28T08:15:00-07:00",
+        "summary": {"new_rows": 14},
+    }
+    payload = module.build_dashboard_payload(_sample_scored_df(), top_n=2, homes_limit=2, health_report=health_report)
+    html = module.render_dashboard_html(payload)
+
+    assert 'id="new-listings-today"' in html
+    assert 'id="listings-pulled-at"' in html
+    assert "formatPullTimestamp" in html
+    assert "Last pull: unavailable" in html
+    assert "payload.new_listings_today" in html
+    assert "payload.listings_pulled_at" in html
 
 
 def test_top_properties_are_str_fit_only_and_deterministic_tiebreak():
