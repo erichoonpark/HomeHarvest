@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-n", type=int, default=30, help="Top N rows for STR/COC scorecards.")
     parser.add_argument("--dashboard-top-n", type=int, default=30, help="Top N rows in dashboard widgets.")
     parser.add_argument("--homes-limit", type=int, default=200, help="Homes loaded into interactive dashboard panel.")
+    parser.add_argument(
+        "--allow-empty-incremental",
+        action="store_true",
+        help="Allow ingest step to pass when incremental scrape finds zero deduped listings.",
+    )
+    parser.add_argument(
+        "--health-report-output",
+        help="Optional path for the ingest step to write incremental health report JSON.",
+    )
     return parser.parse_args()
 
 
@@ -38,6 +48,19 @@ def _run_step(label: str, cmd: list[str]) -> None:
     printable = " ".join(cmd)
     print(f"[daily-str-pipeline] {label}: {printable}")
     subprocess.run(cmd, check=True, cwd=str(PROJECT_ROOT))
+
+
+def _print_ingest_health_report(path: str | None) -> None:
+    if not path:
+        return
+
+    report_path = Path(path)
+    if not report_path.exists():
+        print(f"[daily-str-pipeline][ingest-health] missing report file at {report_path}")
+        return
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    print(f"[daily-str-pipeline][ingest-health]{json.dumps(payload, sort_keys=True)}")
 
 
 def main() -> None:
@@ -53,6 +76,10 @@ def main() -> None:
         elif args.date_from or args.date_to:
             raise ValueError("--date-from and --date-to must be provided together.")
         scrape_cmd.extend(["--lookback-days", str(args.lookback_days)])
+        if args.allow_empty_incremental:
+            scrape_cmd.append("--allow-empty-incremental")
+    if args.health_report_output:
+        scrape_cmd.extend(["--health-report-output", args.health_report_output])
 
     str_cmd = [
         py,
@@ -93,7 +120,10 @@ def main() -> None:
         str(args.homes_limit),
     ]
 
-    _run_step("ingest", scrape_cmd)
+    try:
+        _run_step("ingest", scrape_cmd)
+    finally:
+        _print_ingest_health_report(args.health_report_output)
     _run_step("str-fit", str_cmd)
     _run_step("coc", coc_cmd)
     _run_step("dashboard", dash_cmd)

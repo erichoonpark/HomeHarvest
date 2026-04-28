@@ -123,6 +123,15 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Incremental reliability window when no explicit dates are provided (default: 3).",
     )
+    parser.add_argument(
+        "--allow-empty-incremental",
+        action="store_true",
+        help="Allow incremental mode to succeed even when zero deduped rows are fetched.",
+    )
+    parser.add_argument(
+        "--health-report-output",
+        help="Optional path to write incremental health report JSON.",
+    )
     return parser.parse_args()
 
 
@@ -745,6 +754,7 @@ def summarize_incremental_batch(
     deduped_batch_df: pd.DataFrame,
     new_rows_df: pd.DataFrame,
     status_updated_rows: int = 0,
+    refreshed_same_status_rows: int = 0,
     unchanged_overlap_rows: int = 0,
 ) -> dict[str, int]:
     existing_ids = {
@@ -758,13 +768,18 @@ def summarize_incremental_batch(
         if _normalize_property_id(v)
     }
     overlap_count = len(deduped_ids & existing_ids)
+    unchanged_rows = int(unchanged_overlap_rows)
+    skipped_overlap_rows = max(0, overlap_count - int(status_updated_rows) - int(refreshed_same_status_rows))
     return {
-        "fetched_rows": len(fetched_df),
-        "deduped_rows": len(deduped_batch_df),
+        "fetched_rows": int(len(fetched_df)),
+        "deduped_rows": int(len(deduped_batch_df)),
         "existing_overlap_rows": overlap_count,
-        "new_rows": len(new_rows_df),
-        "status_updated_rows": status_updated_rows,
-        "unchanged_overlap_rows": unchanged_overlap_rows,
+        "new_rows": int(len(new_rows_df)),
+        "status_updated_rows": int(status_updated_rows),
+        "refreshed_same_status_rows": int(refreshed_same_status_rows),
+        "unchanged_rows": unchanged_rows,
+        "unchanged_overlap_rows": unchanged_rows,
+        "skipped_overlap_rows": skipped_overlap_rows,
     }
 
 
@@ -793,7 +808,7 @@ def apply_incremental_upserts(
     batch_run_at: str,
     batch_window_start: str,
     batch_window_end: str,
-) -> tuple[pd.DataFrame, pd.DataFrame, int, int]:
+) -> tuple[pd.DataFrame, pd.DataFrame, int, int, int]:
     """
     Upsert deduped batch into existing rows.
 
@@ -804,7 +819,7 @@ def apply_incremental_upserts(
     combined_df = existing_df.copy()
 
     if deduped_batch_df.empty:
-        return combined_df, deduped_batch_df.copy(), 0, 0
+        return combined_df, deduped_batch_df.copy(), 0, 0, 0
 
     if "property_id" not in combined_df.columns:
         combined_df["property_id"] = pd.NA
@@ -818,6 +833,7 @@ def apply_incremental_upserts(
 
     new_rows: list[dict[str, object]] = []
     status_updated_rows = 0
+    refreshed_same_status_rows = 0
     unchanged_overlap_rows = 0
 
     for _, incoming_row in deduped_batch_df.iterrows():
@@ -867,6 +883,8 @@ def apply_incremental_upserts(
             )
             if status_changed:
                 status_updated_rows += 1
+            else:
+                refreshed_same_status_rows += 1
         else:
             unchanged_overlap_rows += 1
 
@@ -874,7 +892,7 @@ def apply_incremental_upserts(
     if not new_rows_df.empty:
         combined_df = pd.concat([combined_df, new_rows_df], ignore_index=True, sort=False)
 
-    return combined_df, new_rows_df, status_updated_rows, unchanged_overlap_rows
+    return combined_df, new_rows_df, status_updated_rows, refreshed_same_status_rows, unchanged_overlap_rows
 
 
 def output_zip_folder(zip_code: str, frames: dict[str, pd.DataFrame]) -> None:
@@ -892,6 +910,44 @@ def normalize_combined_export_columns(df: pd.DataFrame) -> pd.DataFrame:
     if "str_organized_neighborhood" in normalized.columns and "neighborhoods" in normalized.columns:
         normalized = normalized.drop(columns=["neighborhoods"])
     return normalized
+
+
+def _build_incremental_health_report(
+    *,
+    summary: dict[str, int],
+    zip_results: list[dict[str, object]],
+    window_start: datetime,
+    window_end: datetime,
+    batch_run_at: str,
+    allow_empty_incremental: bool,
+    combined_total_rows: int,
+    failure_reason: str | None = None,
+) -> dict[str, object]:
+    return {
+        "mode": "incremental",
+        "status": "failure" if failure_reason else "success",
+        "failure_reason": failure_reason,
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+        "batch_run_at": batch_run_at,
+        "allow_empty_incremental": bool(allow_empty_incremental),
+        "summary": summary,
+        "combined_total_rows": int(combined_total_rows),
+        "zip_results": zip_results,
+        "outputs": {
+            "combined_csv": str(COMBINED_CSV_PATH),
+            "combined_xlsx": str(COMBINED_XLSX_PATH),
+        },
+    }
+
+
+def _emit_incremental_health_report(report: dict[str, object], output_path: str | None = None) -> None:
+    if output_path:
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    print(f"[incremental-health-report]{json.dumps(report, sort_keys=True)}")
 
 
 def run_full_mode() -> None:
@@ -934,7 +990,9 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
     window_start, window_end = resolve_window_from_args(args)
 
     frames: list[pd.DataFrame] = []
+    zip_results: list[dict[str, object]] = []
     for zip_code in STR_FRIENDLY_ZIP_CODES:
+        listing_type_results: list[dict[str, object]] = []
         for listing_type in LISTING_TYPES_INCREMENTAL:
             df = get_property_details(
                 zip_code,
@@ -942,8 +1000,23 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
                 date_from=window_start,
                 date_to=window_end,
             )
+            listing_type_results.append(
+                {
+                    "listing_type": listing_type,
+                    "fetched_rows": int(len(df)),
+                }
+            )
             if not df.empty:
                 frames.append(df)
+        zip_results.append(
+            {
+                "zip_code": zip_code,
+                "attempted_listing_types": int(len(listing_type_results)),
+                "fetched_rows": int(sum(item["fetched_rows"] for item in listing_type_results)),
+                "non_empty_listing_types": int(sum(1 for item in listing_type_results if item["fetched_rows"] > 0)),
+                "listing_type_results": listing_type_results,
+            }
+        )
 
     fetched_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if not fetched_df.empty:
@@ -960,12 +1033,14 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
     deduped_batch = dedupe_batch_by_property_id(fetched_df)
 
     batch_run_at = datetime.now(ZoneInfo(LA_TIMEZONE)).isoformat()
-    combined_df, incremental_new_rows, status_updated_rows, unchanged_overlap_rows = apply_incremental_upserts(
-        existing_df,
-        deduped_batch,
-        batch_run_at=batch_run_at,
-        batch_window_start=window_start.isoformat(),
-        batch_window_end=window_end.isoformat(),
+    combined_df, incremental_new_rows, status_updated_rows, refreshed_same_status_rows, unchanged_overlap_rows = (
+        apply_incremental_upserts(
+            existing_df,
+            deduped_batch,
+            batch_run_at=batch_run_at,
+            batch_window_start=window_start.isoformat(),
+            batch_window_end=window_end.isoformat(),
+        )
     )
     summary = summarize_incremental_batch(
         existing_df,
@@ -973,8 +1048,33 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
         deduped_batch,
         incremental_new_rows,
         status_updated_rows=status_updated_rows,
+        refreshed_same_status_rows=refreshed_same_status_rows,
         unchanged_overlap_rows=unchanged_overlap_rows,
     )
+
+    failure_reason = None
+    if summary["deduped_rows"] == 0 and not args.allow_empty_incremental:
+        failure_reason = (
+            "Incremental scrape fetched zero usable listings "
+            f"for window {window_start.isoformat()} -> {window_end.isoformat()}."
+        )
+
+    report = _build_incremental_health_report(
+        summary=summary,
+        zip_results=zip_results,
+        window_start=window_start,
+        window_end=window_end,
+        batch_run_at=batch_run_at,
+        allow_empty_incremental=args.allow_empty_incremental,
+        combined_total_rows=len(combined_df),
+        failure_reason=failure_reason,
+    )
+    _emit_incremental_health_report(report, args.health_report_output)
+
+    if failure_reason:
+        zip_rollup = ", ".join(f"{item['zip_code']}={item['fetched_rows']}" for item in zip_results)
+        raise RuntimeError(f"{failure_reason} ZIP totals: {zip_rollup}")
+
     combined_df = normalize_combined_export_columns(combined_df)
 
     combined_df.to_csv(COMBINED_CSV_PATH, index=False)
@@ -987,8 +1087,9 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
         f"Overlap with existing property_id rows: {summary['existing_overlap_rows']}\n"
         f"New rows appended: {summary['new_rows']}\n"
         f"Existing rows updated due to status change: {summary['status_updated_rows']}\n"
-        f"Existing rows unchanged (same status): {summary['unchanged_overlap_rows']}\n"
-        f"Skipped existing property_id rows: {max(0, summary['existing_overlap_rows'] - summary['status_updated_rows'])}\n"
+        f"Existing rows refreshed (same status, field changes): {summary['refreshed_same_status_rows']}\n"
+        f"Existing rows unchanged (same status, no field changes): {summary['unchanged_rows']}\n"
+        f"Skipped existing property_id rows: {summary['skipped_overlap_rows']}\n"
         f"Combined total rows: {len(combined_df)}\n"
         f"Wrote: {COMBINED_CSV_PATH}\n"
         f"Wrote: {COMBINED_XLSX_PATH}"
