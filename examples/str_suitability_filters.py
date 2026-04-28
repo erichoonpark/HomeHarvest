@@ -484,6 +484,11 @@ def _resolve_private_pool(row: pd.Series, assumptions: dict[str, Any]) -> tuple[
         is_private_pool = _safe_bool(row.get("is_private_pool"))
         is_private_pool_known = _safe_bool(row.get("is_private_pool_known"))
         source = "canonical"
+    elif inferred_private_pool_known:
+        # Fall back to secondary textual/tag/photo inference when canonical fields are missing.
+        is_private_pool = inferred_private_pool
+        is_private_pool_known = inferred_private_pool_known
+        source = inferred_source
     else:
         is_private_pool, is_private_pool_known, source = _infer_pool(row)
     if is_private_pool_known and is_private_pool:
