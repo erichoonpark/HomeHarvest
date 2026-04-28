@@ -275,6 +275,14 @@ def _normalize_zip(value: Any) -> str:
     return text
 
 
+def _canonicalize_neighborhood(value: Any) -> str:
+    normalized = _safe_str(value).strip().lower()
+    if not normalized:
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
 def _address_key(row: pd.Series) -> tuple[str, str, str, str]:
     return (
         _safe_str(row.get("street")).strip().lower(),
@@ -536,6 +544,11 @@ def _quality_fail_reason(row: pd.Series, co_group_keys: set[tuple[Any, Any, Any,
 def _compute_str_support(row: pd.Series, assumptions: dict[str, Any]) -> bool:
     under_cap = _safe_bool(row.get("str_nbhd_under_cap_current"))
     if assumptions["hard_gates"].get("require_str_supported_neighborhood", True):
+        # Prefer explicit organized-neighborhood matching when available.
+        neighborhood = _canonicalize_neighborhood(row.get("str_organized_neighborhood") or row.get("neighborhoods"))
+        cap_nbhd_keys = assumptions.get("_derived_cap_eligible_neighborhood_keys", set())
+        if neighborhood and cap_nbhd_keys:
+            return neighborhood in cap_nbhd_keys
         return under_cap
     return True
 
@@ -589,6 +602,57 @@ def _derive_cap_eligible_zip_codes(assumptions: dict[str, Any]) -> tuple[set[str
             zip_candidates = {z for z in zip_candidates if z in scope_candidates}
 
         eligible.update(zip_candidates)
+
+    return eligible, "ok"
+
+
+def _derive_cap_eligible_neighborhood_keys(assumptions: dict[str, Any]) -> tuple[set[str], str]:
+    geography = assumptions.get("geography", {})
+    if not geography.get("enabled", True):
+        return set(), "geography_disabled"
+
+    workbook_path = Path(str(geography.get("neighborhood_cap_workbook", DEFAULT_CAP_WORKBOOK_PATH)))
+    if not workbook_path.exists():
+        return set(), "missing_cap_workbook"
+
+    percentage_col = str(geography.get("percentage_column", "current_neighborhood_percentage"))
+    neighborhood_key_col = str(geography.get("neighborhood_key_column", "neighborhood_key"))
+    organized_neighborhood_col = str(geography.get("organized_neighborhood_column", "organized_neighborhood"))
+    zip_codes_col = str(geography.get("zip_codes_column", "zip_codes"))
+    primary_zip_col = str(geography.get("primary_zip_column", "primary_zip"))
+    cap_max = float(geography.get("cap_percentage_max", 0.20))
+
+    table = pd.read_excel(workbook_path)
+    if percentage_col not in table.columns:
+        return set(), "missing_cap_percentage_column"
+
+    scope_candidates = {_normalize_zip(v) for v in assumptions.get("location", {}).get("scope_zip_candidates", []) if v}
+    eligible: set[str] = set()
+
+    for _, row in table.iterrows():
+        pct = _safe_float(row.get(percentage_col), float("nan"))
+        if pd.isna(pct) or pct >= cap_max:
+            continue
+
+        zip_candidates: set[str] = set()
+        if zip_codes_col in table.columns:
+            raw = _safe_str(row.get(zip_codes_col))
+            for token in raw.split("|"):
+                z = _normalize_zip(token)
+                if z:
+                    zip_candidates.add(z)
+        z_primary = _normalize_zip(row.get(primary_zip_col))
+        if z_primary:
+            zip_candidates.add(z_primary)
+
+        if scope_candidates and not (zip_candidates & scope_candidates):
+            continue
+
+        for source_col in (neighborhood_key_col, organized_neighborhood_col):
+            if source_col in table.columns:
+                key = _canonicalize_neighborhood(row.get(source_col))
+                if key:
+                    eligible.add(key)
 
     return eligible, "ok"
 
@@ -764,6 +828,9 @@ def _score_dataframe(rows: pd.DataFrame, assumptions: dict[str, Any]) -> pd.Data
     if rows.empty:
         return pd.DataFrame()
     cap_eligible_zips, cap_status = _derive_cap_eligible_zip_codes(assumptions)
+    cap_eligible_neighborhoods, cap_nbhd_status = _derive_cap_eligible_neighborhood_keys(assumptions)
+    assumptions["_derived_cap_eligible_neighborhood_keys"] = cap_eligible_neighborhoods
+    assumptions["_derived_cap_eligible_neighborhood_status"] = cap_nbhd_status
     co_group_keys = _co_ownership_group_keys(rows)
     scored_rows = [
         _score_row(
@@ -809,35 +876,52 @@ def _fetch_enriched_pool_rows(queue_df: pd.DataFrame, assumptions: dict[str, Any
     if queue_df.empty:
         return pd.DataFrame()
     enrichment_cfg = assumptions.get("enrichment_workflow", {})
-    listing_type = str(enrichment_cfg.get("listing_type", "for_sale"))
+    listing_type = str(enrichment_cfg.get("listing_type", "for_sale")).strip().lower()
     past_days = int(enrichment_cfg.get("past_days", 365))
 
-    examples_dir = str((Path(__file__).resolve().parent))
-    if examples_dir not in sys.path:
-        sys.path.insert(0, examples_dir)
     try:
-        import scrape_listings_core as ingest
+        from homeharvest import scrape_property
     except Exception:
         return pd.DataFrame()
 
     needed_ids = {str(pid) for pid in queue_df.get("property_id", pd.Series(dtype="object")).astype(str).tolist()}
+    needed_address_keys = {_address_key(row) for _, row in queue_df.iterrows()}
+    listing_types = [listing_type]
+    if listing_type == "for_sale":
+        # Fallback for stale inventory in combined snapshots.
+        listing_types.extend(["pending", "sold"])
     fetched_rows: list[pd.DataFrame] = []
     for zip_code in sorted(
         {_normalize_zip(z) for z in queue_df.get("zip_code", pd.Series(dtype="object")) if _normalize_zip(z)}
     ):
-        try:
-            fetched = ingest.get_property_details(zip_code, listing_type, past_days=past_days)
-        except Exception:
-            continue
-        if fetched.empty or "property_id" not in fetched.columns:
-            continue
-        narrowed = fetched[fetched["property_id"].astype(str).isin(needed_ids)].copy()
-        if narrowed.empty:
-            continue
-        narrowed["enrichment_attempted_at"] = datetime.now(timezone.utc).isoformat()
-        narrowed["enrichment_source"] = "scrape_listings_core.get_property_details"
-        narrowed["enrichment_round"] = 2
-        fetched_rows.append(narrowed)
+        for lt in listing_types:
+            try:
+                fetched = scrape_property(
+                    location=zip_code,
+                    listing_type=lt,
+                    property_type=["single_family"],
+                    past_days=past_days,
+                    extra_property_data=True,
+                )
+            except Exception:
+                continue
+            if fetched.empty:
+                continue
+
+            id_mask = fetched.get("property_id", pd.Series(dtype="object")).astype(str).isin(needed_ids)
+            if {"street", "city", "state", "zip_code"}.issubset(fetched.columns):
+                address_keys = fetched.apply(_address_key, axis=1)
+                address_mask = address_keys.isin(needed_address_keys)
+            else:
+                address_mask = pd.Series(False, index=fetched.index)
+
+            narrowed = fetched[id_mask | address_mask].copy()
+            if narrowed.empty:
+                continue
+            narrowed["enrichment_attempted_at"] = datetime.now(timezone.utc).isoformat()
+            narrowed["enrichment_source"] = f"homeharvest.scrape_property:{lt}"
+            narrowed["enrichment_round"] = 2
+            fetched_rows.append(narrowed)
 
     if not fetched_rows:
         return pd.DataFrame()
