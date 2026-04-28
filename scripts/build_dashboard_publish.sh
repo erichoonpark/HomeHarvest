@@ -8,12 +8,16 @@ HOMES_LIMIT="${HOMES_LIMIT:-100}"
 
 mkdir -p "$OUTPUT_DIR"
 
-python - <<'PY'
+if ! python - <<'PY'
 import importlib.util
 import sys
 if importlib.util.find_spec("openpyxl") is None:
-    sys.exit("Missing dependency: openpyxl. Install with: pip install openpyxl")
+    sys.exit(1)
 PY
+then
+  echo "openpyxl not found; installing into build environment..."
+  python -m pip install --quiet openpyxl
+fi
 
 python examples/coc_dashboard.py \
   --input "$INPUT_PATH" \
