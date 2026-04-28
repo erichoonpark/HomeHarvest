@@ -256,7 +256,8 @@ jobs:
             examples/zips/combined.xlsx \
             examples/zips/str_suitability_filter.xlsx \
             examples/zips/coc_scorecard.xlsx \
-            examples/zips/coc_dashboard.html; then
+            examples/zips/coc_dashboard.html \
+            examples/zips/incremental_health_report.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -280,6 +281,7 @@ jobs:
               - examples/zips/str_suitability_filter.xlsx
               - examples/zips/coc_scorecard.xlsx
               - examples/zips/coc_dashboard.html
+              - examples/zips/incremental_health_report.json
           branch: automation/daily-incremental-scrape
           delete-branch: false
           add-paths: |
@@ -288,6 +290,7 @@ jobs:
             examples/zips/str_suitability_filter.xlsx
             examples/zips/coc_scorecard.xlsx
             examples/zips/coc_dashboard.html
+            examples/zips/incremental_health_report.json
 
       - name: Report PR creation fallback
         if: steps.detect_changes.outputs.changed == 'true' && steps.create_pr.outcome == 'failure'

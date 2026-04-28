@@ -1,0 +1,111 @@
+{
+  "allow_empty_incremental": false,
+  "batch_run_at": "2026-04-28T08:37:18.179314-07:00",
+  "combined_total_rows": 2483,
+  "failure_reason": null,
+  "mode": "incremental",
+  "outputs": {
+    "combined_csv": "/home/runner/work/HomeHarvest/HomeHarvest/examples/zips/combined.csv",
+    "combined_xlsx": "/home/runner/work/HomeHarvest/HomeHarvest/examples/zips/combined.xlsx"
+  },
+  "status": "success",
+  "summary": {
+    "deduped_rows": 4,
+    "existing_overlap_rows": 4,
+    "fetched_rows": 4,
+    "new_rows": 0,
+    "refreshed_same_status_rows": 4,
+    "skipped_overlap_rows": 0,
+    "status_updated_rows": 0,
+    "unchanged_overlap_rows": 0,
+    "unchanged_rows": 0
+  },
+  "window_end": "2026-04-27T23:59:59-07:00",
+  "window_start": "2026-04-25T00:00:00-07:00",
+  "zip_results": [
+    {
+      "attempted_listing_types": 1,
+      "fetched_rows": 0,
+      "listing_type_results": [
+        {
+          "fetched_rows": 0,
+          "listing_type": "for_sale"
+        }
+      ],
+      "non_empty_listing_types": 0,
+      "zip_code": "92258"
+    },
+    {
+      "attempted_listing_types": 1,
+      "fetched_rows": 1,
+      "listing_type_results": [
+        {
+          "fetched_rows": 1,
+          "listing_type": "for_sale"
+        }
+      ],
+      "non_empty_listing_types": 1,
+      "zip_code": "92262"
+    },
+    {
+      "attempted_listing_types": 1,
+      "fetched_rows": 0,
+      "listing_type_results": [
+        {
+          "fetched_rows": 0,
+          "listing_type": "for_sale"
+        }
+      ],
+      "non_empty_listing_types": 0,
+      "zip_code": "92263"
+    },
+    {
+      "attempted_listing_types": 1,
+      "fetched_rows": 1,
+      "listing_type_results": [
+        {
+          "fetched_rows": 1,
+          "listing_type": "for_sale"
+        }
+      ],
+      "non_empty_listing_types": 1,
+      "zip_code": "92264"
+    },
+    {
+      "attempted_listing_types": 1,
+      "fetched_rows": 0,
+      "listing_type_results": [
+        {
+          "fetched_rows": 0,
+          "listing_type": "for_sale"
+        }
+      ],
+      "non_empty_listing_types": 0,
+      "zip_code": "92201"
+    },
+    {
+      "attempted_listing_types": 1,
+      "fetched_rows": 0,
+      "listing_type_results": [
+        {
+          "fetched_rows": 0,
+          "listing_type": "for_sale"
+        }
+      ],
+      "non_empty_listing_types": 0,
+      "zip_code": "92202"
+    },
+    {
+      "attempted_listing_types": 1,
+      "fetched_rows": 2,
+      "listing_type_results": [
+        {
+          "fetched_rows": 2,
+          "listing_type": "for_sale"
+        }
+      ],
+      "non_empty_listing_types": 1,
+      "zip_code": "92203"
+    }
+  ]
+}
