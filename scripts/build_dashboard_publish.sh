@@ -8,7 +8,7 @@ HOMES_LIMIT="${HOMES_LIMIT:-100}"
 
 mkdir -p "$OUTPUT_DIR"
 
-if ! python - <<'PY'
+if ! poetry run python - <<'PY'
 import importlib.util
 import sys
 if importlib.util.find_spec("openpyxl") is None:
@@ -16,10 +16,10 @@ if importlib.util.find_spec("openpyxl") is None:
 PY
 then
   echo "openpyxl not found; installing into build environment..."
-  python -m pip install --quiet openpyxl
+  poetry run python -m pip install --quiet openpyxl
 fi
 
-python examples/coc_dashboard.py \
+poetry run python examples/coc_dashboard.py \
   --input "$INPUT_PATH" \
   --output "$OUTPUT_DIR/index.html" \
   --top-n "$TOP_N" \
