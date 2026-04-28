@@ -6,15 +6,22 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: write
+  issues: write
   pull-requests: write
 
 jobs:
   incremental-scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     concurrency:
       group: daily-incremental-scrape
       cancel-in-progress: false
+    env:
+      HEALTH_REPORT_PATH: examples/zips/incremental_health_report.json
+      RELIABILITY_ISSUE_LABEL: daily-scrape
+      RELIABILITY_ISSUE_TITLE: Daily incremental scrape reliability alert
 
     steps:
       - name: Checkout repository
@@ -43,7 +50,203 @@ jobs:
         run: poetry run python -c "import homeharvest; print(homeharvest.__file__)"
 
       - name: Run daily STR pipeline
-        run: poetry run python examples/daily_str_pipeline.py --mode incremental
+        run: >
+          poetry run python examples/daily_str_pipeline.py
+          --mode incremental
+          --health-report-output "$HEALTH_REPORT_PATH"
+
+      - name: Upload incremental health report
+        if: always() && hashFiles('examples/zips/incremental_health_report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: incremental-health-report
+          path: ${{ env.HEALTH_REPORT_PATH }}
+
+      - name: Publish incremental scrape summary
+        if: always()
+        run: |
+          if [ ! -f "$HEALTH_REPORT_PATH" ]; then
+            echo "### Incremental scrape health report" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Report file not found: $HEALTH_REPORT_PATH" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report_path = Path("examples/zips/incremental_health_report.json")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          summary = report.get("summary", {})
+          zip_results = report.get("zip_results", [])
+          lines = [
+              "### Incremental scrape health report",
+              f"- Status: {report.get('status', 'unknown')}",
+              f"- Window: {report.get('window_start', 'n/a')} -> {report.get('window_end', 'n/a')}",
+              f"- Fetched rows: {summary.get('fetched_rows', 0)}",
+              f"- Deduped rows: {summary.get('deduped_rows', 0)}",
+              f"- New rows: {summary.get('new_rows', 0)}",
+              f"- Status-updated rows: {summary.get('status_updated_rows', 0)}",
+              f"- Refreshed same-status rows: {summary.get('refreshed_same_status_rows', 0)}",
+              f"- Unchanged rows: {summary.get('unchanged_rows', 0)}",
+          ]
+          failure_reason = report.get("failure_reason")
+          if failure_reason:
+              lines.append(f"- Failure reason: {failure_reason}")
+          if zip_results:
+              lines.append("- ZIP totals:")
+              for item in zip_results:
+                  lines.append(f"  - {item.get('zip_code')}: {item.get('fetched_rows', 0)}")
+          with Path(__import__("os").environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Check previous workflow conclusion
+        if: always()
+        id: previous_run_status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const workflowId = "daily_incremental_scrape.yml";
+            const currentRunId = context.runId;
+            const branch = context.ref.replace("refs/heads/", "");
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: workflowId,
+              branch,
+              status: "completed",
+              per_page: 20,
+            });
+            const previous = runs.data.workflow_runs.find((run) => run.id !== currentRunId);
+            const previousFailed = Boolean(previous && previous.conclusion === "failure");
+            core.setOutput("previous_failed", previousFailed ? "true" : "false");
+            core.setOutput("previous_run_id", previous ? String(previous.id) : "");
+            core.setOutput("previous_conclusion", previous ? String(previous.conclusion || "") : "");
+
+      - name: Escalate reliability issue on consecutive failures
+        if: failure() && steps.previous_run_status.outputs.previous_failed == 'true'
+        uses: actions/github-script@v7
+        env:
+          PREVIOUS_RUN_ID: ${{ steps.previous_run_status.outputs.previous_run_id }}
+          PREVIOUS_CONCLUSION: ${{ steps.previous_run_status.outputs.previous_conclusion }}
+        with:
+          script: |
+            const fs = require("fs");
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueTitle = process.env.RELIABILITY_ISSUE_TITLE;
+            const labelName = process.env.RELIABILITY_ISSUE_LABEL;
+            const reportPath = process.env.HEALTH_REPORT_PATH;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            let report = {};
+            if (reportPath && fs.existsSync(reportPath)) {
+              try {
+                report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+              } catch (err) {
+                core.warning(`Unable to parse health report at ${reportPath}: ${err.message}`);
+              }
+            }
+            const summary = report.summary || {};
+            const failureReason = report.failure_reason || "Workflow failed without a structured failure reason.";
+            const body = [
+              "Automated alert: daily incremental scrape failed in consecutive runs.",
+              "",
+              `- Latest run: ${runUrl}`,
+              `- Previous run ID: ${process.env.PREVIOUS_RUN_ID || "n/a"}`,
+              `- Previous conclusion: ${process.env.PREVIOUS_CONCLUSION || "n/a"}`,
+              `- Window: ${report.window_start || "n/a"} -> ${report.window_end || "n/a"}`,
+              `- Failure reason: ${failureReason}`,
+              `- Fetched rows: ${summary.fetched_rows ?? 0}`,
+              `- Deduped rows: ${summary.deduped_rows ?? 0}`,
+              `- New rows: ${summary.new_rows ?? 0}`,
+              `- Status-updated rows: ${summary.status_updated_rows ?? 0}`,
+              `- Refreshed same-status rows: ${summary.refreshed_same_status_rows ?? 0}`,
+              `- Unchanged rows: ${summary.unchanged_rows ?? 0}`,
+              "",
+              "Investigate Realtor/API availability, filtering logic, and workflow runtime failures before the next scheduled run.",
+            ].join("\n");
+
+            const labels = await github.rest.issues.listLabelsForRepo({ owner, repo, per_page: 100 });
+            if (!labels.data.some((label) => label.name === labelName)) {
+              await github.rest.issues.createLabel({
+                owner,
+                repo,
+                name: labelName,
+                color: "B60205",
+                description: "Reliability alerts for daily listing scrape automation",
+              });
+            }
+
+            const openIssues = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: "open",
+              labels: labelName,
+              per_page: 100,
+            });
+            const existing = openIssues.data.find((issue) => !issue.pull_request && issue.title === issueTitle);
+
+            if (existing) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body,
+              });
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body: `Another consecutive failure detected: ${runUrl}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title: issueTitle,
+                body,
+                labels: [labelName],
+              });
+            }
+
+      - name: Resolve reliability issue on recovery
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueTitle = process.env.RELIABILITY_ISSUE_TITLE;
+            const labelName = process.env.RELIABILITY_ISSUE_LABEL;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            const openIssues = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: "open",
+              labels: labelName,
+              per_page: 100,
+            });
+            const existing = openIssues.data.find((issue) => !issue.pull_request && issue.title === issueTitle);
+            if (!existing) {
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: existing.number,
+              body: `Recovery detected. Daily scrape succeeded in ${runUrl}. Closing this alert.`,
+            });
+            await github.rest.issues.update({
+              owner,
+              repo,
+              issue_number: existing.number,
+              state: "closed",
+            });
 
       - name: Detect data changes
         id: detect_changes

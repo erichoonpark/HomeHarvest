@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -69,3 +70,42 @@ def test_daily_pipeline_rejects_partial_date_override(monkeypatch):
         assert "--date-from and --date-to must be provided together." in str(exc)
     else:
         raise AssertionError("Expected ValueError for partial date override.")
+
+
+def test_daily_pipeline_passes_ingest_reliability_flags(monkeypatch):
+    module = _load_module()
+    recorded: list[tuple[str, list[str]]] = []
+
+    def _fake_run(label: str, cmd: list[str]) -> None:
+        recorded.append((label, cmd))
+
+    monkeypatch.setattr(module, "_run_step", _fake_run)
+    monkeypatch.setattr(module, "_print_ingest_health_report", lambda _path: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "daily_str_pipeline.py",
+            "--mode",
+            "incremental",
+            "--allow-empty-incremental",
+            "--health-report-output",
+            "examples/zips/incremental_health_report.json",
+        ],
+    )
+
+    module.main()
+    ingest_cmd = recorded[0][1]
+    assert "--allow-empty-incremental" in ingest_cmd
+    assert "--health-report-output" in ingest_cmd
+    assert "examples/zips/incremental_health_report.json" in ingest_cmd
+
+
+def test_print_ingest_health_report_outputs_stable_json(tmp_path, capsys):
+    module = _load_module()
+    report_path = tmp_path / "health.json"
+    report_path.write_text(json.dumps({"status": "success", "summary": {"deduped_rows": 5}}), encoding="utf-8")
+    module._print_ingest_health_report(str(report_path))
+    out = capsys.readouterr().out
+    assert "[daily-str-pipeline][ingest-health]" in out
+    assert '"deduped_rows": 5' in out

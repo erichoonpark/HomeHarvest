@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -140,12 +141,22 @@ def test_summarize_incremental_batch_reports_overlap():
     deduped = fetched.copy()
     new_rows = pd.DataFrame([{"property_id": "222", "status": "FOR_SALE"}])
 
-    summary = scrape_module.summarize_incremental_batch(existing, fetched, deduped, new_rows)
+    summary = scrape_module.summarize_incremental_batch(
+        existing,
+        fetched,
+        deduped,
+        new_rows,
+        status_updated_rows=0,
+        refreshed_same_status_rows=1,
+        unchanged_overlap_rows=0,
+    )
 
     assert summary["fetched_rows"] == 2
     assert summary["deduped_rows"] == 2
     assert summary["existing_overlap_rows"] == 1
     assert summary["new_rows"] == 1
+    assert summary["refreshed_same_status_rows"] == 1
+    assert summary["skipped_overlap_rows"] == 0
 
 
 def test_apply_incremental_upserts_updates_status_and_appends_new():
@@ -175,7 +186,7 @@ def test_apply_incremental_upserts_updates_status_and_appends_new():
         ]
     )
 
-    combined, new_rows, updated_count, unchanged_count = scrape_module.apply_incremental_upserts(
+    combined, new_rows, updated_count, refreshed_count, unchanged_count = scrape_module.apply_incremental_upserts(
         existing,
         deduped_batch,
         batch_run_at="2026-04-24T08:00:00-07:00",
@@ -184,6 +195,7 @@ def test_apply_incremental_upserts_updates_status_and_appends_new():
     )
 
     assert updated_count == 1
+    assert refreshed_count == 0
     assert unchanged_count == 0
     assert len(new_rows) == 1
     assert len(combined) == 2
@@ -226,7 +238,7 @@ def test_apply_incremental_upserts_refreshes_same_status_when_fields_change():
         ]
     )
 
-    combined, new_rows, updated_count, unchanged_count = scrape_module.apply_incremental_upserts(
+    combined, new_rows, updated_count, refreshed_count, unchanged_count = scrape_module.apply_incremental_upserts(
         existing,
         deduped_batch,
         batch_run_at="2026-04-24T08:00:00-07:00",
@@ -235,6 +247,7 @@ def test_apply_incremental_upserts_refreshes_same_status_when_fields_change():
     )
 
     assert updated_count == 0
+    assert refreshed_count == 1
     assert unchanged_count == 0
     assert new_rows.empty
 
@@ -509,3 +522,76 @@ def test_get_property_details_retains_baseline_alias_fields(monkeypatch):
     assert "raw_photo_tags" in out.columns
     assert "pool_evidence" in out.columns
     assert "pool_signal_sources" in out.columns
+
+
+def test_run_incremental_mode_fails_when_empty_and_allow_empty_is_disabled(tmp_path: Path, monkeypatch):
+    scrape_module = _load_scrape_listings_module()
+
+    monkeypatch.setattr(
+        scrape_module,
+        "resolve_window_from_args",
+        lambda _args: (
+            pd.Timestamp("2026-04-21T00:00:00-07:00").to_pydatetime(),
+            pd.Timestamp("2026-04-23T23:59:59-07:00").to_pydatetime(),
+        ),
+    )
+    monkeypatch.setattr(scrape_module, "get_property_details", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(scrape_module, "enrich_with_palm_springs_str_neighborhoods", lambda df, **kwargs: df)
+    monkeypatch.setattr(scrape_module, "COMBINED_XLSX_PATH", tmp_path / "combined.xlsx")
+    monkeypatch.setattr(scrape_module, "COMBINED_CSV_PATH", tmp_path / "combined.csv")
+    monkeypatch.setattr(scrape_module, "OUTPUT_DIR", tmp_path)
+
+    args = SimpleNamespace(
+        run_date=None,
+        date_from=None,
+        date_to=None,
+        lookback_days=3,
+        allow_empty_incremental=False,
+        health_report_output=str(tmp_path / "health.json"),
+    )
+
+    try:
+        scrape_module.run_incremental_mode(args)
+    except RuntimeError as exc:
+        assert "fetched zero usable listings" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError for empty incremental scrape.")
+
+    report = json.loads((tmp_path / "health.json").read_text(encoding="utf-8"))
+    assert report["status"] == "failure"
+    assert report["summary"]["deduped_rows"] == 0
+    assert len(report["zip_results"]) == len(scrape_module.STR_FRIENDLY_ZIP_CODES)
+
+
+def test_run_incremental_mode_allows_empty_when_flag_enabled(tmp_path: Path, monkeypatch):
+    scrape_module = _load_scrape_listings_module()
+
+    monkeypatch.setattr(
+        scrape_module,
+        "resolve_window_from_args",
+        lambda _args: (
+            pd.Timestamp("2026-04-21T00:00:00-07:00").to_pydatetime(),
+            pd.Timestamp("2026-04-23T23:59:59-07:00").to_pydatetime(),
+        ),
+    )
+    monkeypatch.setattr(scrape_module, "get_property_details", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(scrape_module, "enrich_with_palm_springs_str_neighborhoods", lambda df, **kwargs: df)
+    monkeypatch.setattr(scrape_module, "COMBINED_XLSX_PATH", tmp_path / "combined.xlsx")
+    monkeypatch.setattr(scrape_module, "COMBINED_CSV_PATH", tmp_path / "combined.csv")
+    monkeypatch.setattr(scrape_module, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(pd.DataFrame, "to_excel", lambda self, *args, **kwargs: None)
+
+    args = SimpleNamespace(
+        run_date=None,
+        date_from=None,
+        date_to=None,
+        lookback_days=3,
+        allow_empty_incremental=True,
+        health_report_output=str(tmp_path / "health.json"),
+    )
+
+    scrape_module.run_incremental_mode(args)
+    report = json.loads((tmp_path / "health.json").read_text(encoding="utf-8"))
+    assert report["status"] == "success"
+    assert report["allow_empty_incremental"] is True
+    assert report["summary"]["deduped_rows"] == 0
