@@ -554,12 +554,14 @@ def build_dashboard_payload(
     if not isinstance(summary, dict):
         summary = {}
     new_listings_today = int(_safe_float(summary.get("new_rows"), 0.0))
+    fetched_rows_today = int(_safe_float(summary.get("fetched_rows"), 0.0))
     listings_pulled_at = _safe_str(health_report.get("batch_run_at")).strip() or None
 
     return {
         "total_ingested": int(len(scored)),
         "total_str_fit_passed": int(len(fit)),
         "new_listings_today": new_listings_today,
+        "fetched_rows_today": fetched_rows_today,
         "listings_pulled_at": listings_pulled_at,
         "top_properties": top_fit,
         "top_properties_luxury": top_luxury,
@@ -841,9 +843,10 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         <p class="s">Passed suitability filters</p>
       </article>
       <article class="kpi">
-        <p class="k">New Listings Added Today</p>
+        <p class="k">Today's Listing Update</p>
         <p id="new-listings-today" class="v">0</p>
-        <p id="listings-pulled-at" class="s">Last pull: unavailable</p>
+        <p id="listing-update-detail" class="s">Fetched 0 listings, 0 were new.</p>
+        <p id="listings-pulled-at" class="s">Last run date: unavailable</p>
       </article>
     </section>
     <section class="module">
@@ -874,10 +877,16 @@ const pullTimestampFormatter = new Intl.DateTimeFormat('en-US', {
 });
 
 function formatPullTimestamp(rawValue) {
-  if (!rawValue) return 'Last pull: unavailable';
+  if (!rawValue) return 'Last run date: unavailable';
   const parsed = new Date(rawValue);
-  if (Number.isNaN(parsed.getTime())) return 'Last pull: unavailable';
-  return `Last pull: ${pullTimestampFormatter.format(parsed)}`;
+  if (Number.isNaN(parsed.getTime())) return 'Last run date: unavailable';
+  return `Last run date: ${pullTimestampFormatter.format(parsed)}`;
+}
+
+function formatListingUpdateDetail(fetchedRows, newRows) {
+  const fetched = Number(fetchedRows || 0);
+  const netNew = Number(newRows || 0);
+  return `Fetched ${fetched.toLocaleString()} listings, ${netNew.toLocaleString()} were new.`;
 }
 
 function renderPriorityRanking() {
@@ -948,6 +957,10 @@ function init() {
   document.getElementById('total-ingested').textContent = String(payload.total_ingested || 0);
   document.getElementById('total-fit').textContent = String(payload.total_str_fit_passed || 0);
   document.getElementById('new-listings-today').textContent = String(payload.new_listings_today || 0);
+  document.getElementById('listing-update-detail').textContent = formatListingUpdateDetail(
+    payload.fetched_rows_today,
+    payload.new_listings_today,
+  );
   document.getElementById('listings-pulled-at').textContent = formatPullTimestamp(payload.listings_pulled_at);
   document.getElementById('priority-note').textContent = payload.priority_ranking_note || '';
 

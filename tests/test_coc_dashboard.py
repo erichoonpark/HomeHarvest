@@ -168,7 +168,8 @@ def test_render_dashboard_html_contains_expected_sections():
     assert "Coachella Valley STR Review Queue" in html
     assert "Total Listings" in html
     assert "STR Fit Passed" in html
-    assert "New Listings Added Today" in html
+    assert "Today's Listing Update" in html
+    assert "Fetched 0 listings, 0 were new." in html
     assert "Priority Candidates" not in html
     assert "Top Priority Score" not in html
     assert "Best Property Ranking for STR Review" in html
@@ -319,12 +320,13 @@ def test_build_dashboard_payload_includes_health_report_kpis():
     module = _load_module()
     health_report = {
         "batch_run_at": "2026-04-28T08:15:00-07:00",
-        "summary": {"new_rows": 14},
+        "summary": {"new_rows": 14, "fetched_rows": 27},
     }
 
     payload = module.build_dashboard_payload(_sample_scored_df(), top_n=1, homes_limit=2, health_report=health_report)
 
     assert payload["new_listings_today"] == 14
+    assert payload["fetched_rows_today"] == 27
     assert payload["listings_pulled_at"] == "2026-04-28T08:15:00-07:00"
 
 
@@ -333,6 +335,7 @@ def test_build_dashboard_payload_missing_health_report_defaults():
     payload = module.build_dashboard_payload(_sample_scored_df(), top_n=1, homes_limit=2, health_report={})
 
     assert payload["new_listings_today"] == 0
+    assert payload["fetched_rows_today"] == 0
     assert payload["listings_pulled_at"] is None
 
 
@@ -347,7 +350,8 @@ def test_load_incremental_health_report_handles_missing_and_invalid(tmp_path: Pa
 
     ok = tmp_path / "ok.json"
     ok.write_text(
-        json.dumps({"batch_run_at": "2026-04-28T07:00:00-07:00", "summary": {"new_rows": 3}}), encoding="utf-8"
+        json.dumps({"batch_run_at": "2026-04-28T07:00:00-07:00", "summary": {"new_rows": 3, "fetched_rows": 9}}),
+        encoding="utf-8",
     )
     loaded = module._load_incremental_health_report(ok)
     assert loaded["summary"]["new_rows"] == 3
@@ -357,16 +361,19 @@ def test_render_dashboard_html_wires_new_kpi_dom_ids():
     module = _load_module()
     health_report = {
         "batch_run_at": "2026-04-28T08:15:00-07:00",
-        "summary": {"new_rows": 14},
+        "summary": {"new_rows": 14, "fetched_rows": 27},
     }
     payload = module.build_dashboard_payload(_sample_scored_df(), top_n=2, homes_limit=2, health_report=health_report)
     html = module.render_dashboard_html(payload)
 
     assert 'id="new-listings-today"' in html
+    assert 'id="listing-update-detail"' in html
     assert 'id="listings-pulled-at"' in html
     assert "formatPullTimestamp" in html
-    assert "Last pull: unavailable" in html
+    assert "formatListingUpdateDetail" in html
+    assert "Last run date: unavailable" in html
     assert "payload.new_listings_today" in html
+    assert "payload.fetched_rows_today" in html
     assert "payload.listings_pulled_at" in html
 
 
