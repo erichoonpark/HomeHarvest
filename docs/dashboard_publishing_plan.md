@@ -1,69 +1,41 @@
-# Secure Dashboard Publishing (Partner-Only)
+# Secure Dashboard Publishing (GitHub Pages)
 
-This repo now includes scripts so you can publish the dashboard as a static site with security headers and then deploy it to Cloudflare Pages.
+This repo deploys the dashboard through GitHub Actions and GitHub Pages.
 
-## What was added
+## Build + deploy workflow
 
-- `scripts/build_dashboard_publish.sh`: builds `publish/index.html` from your scorecard and adds:
-  - `publish/_headers` (security headers)
-  - `publish/robots.txt` (`Disallow: /`)
-- `scripts/deploy_cloudflare_pages.sh`: deploys `publish/` to Cloudflare Pages with `wrangler`.
-- `Makefile` shortcuts:
-  - `make dashboard-publish`
-  - `make dashboard-deploy-secure`
+- Build script: `scripts/build_dashboard_publish.sh`
+- GitHub workflow: `.github/workflows/deploy_dashboard_pages.yml`
+- Publish folder: `publish/`
 
-## 1) Build the secure static bundle
+## How deployment works
 
-```bash
-make dashboard-publish
-```
+1. Push changes to `master` (or run the workflow manually).
+2. GitHub Actions builds `publish/index.html`, `_headers`, and `robots.txt`.
+3. The workflow uploads `publish/` as an artifact and deploys it to GitHub Pages.
 
-Optional custom input/output:
+## Local commands
 
-```bash
-./scripts/build_dashboard_publish.sh examples/zips/coc_scorecard.xlsx publish
-```
-
-## 2) Deploy to Cloudflare Pages
-
-Set required environment variables:
-
-```bash
-export CLOUDFLARE_API_TOKEN="<token-with-pages-edit>"
-export CLOUDFLARE_ACCOUNT_ID="<account-id>"
-export CLOUDFLARE_PAGES_PROJECT="homeharvest-dashboard"
-```
-
-Deploy:
-
-```bash
-make dashboard-deploy-secure
-```
-
-## 3) Enforce partner-only security (required)
-
-In **Cloudflare Zero Trust → Access → Applications**, protect your Pages URL and set:
-
-- **Login method**: One-time PIN (email)
-- **Allow policy**: only
-  - your email
-  - your partner's email
-- **Default action**: deny
-
-This turns the dashboard into a private link requiring email verification.
-
-## 4) Update workflow
-
-Whenever data changes:
+Build locally:
 
 ```bash
 make dashboard-publish
-make dashboard-deploy-secure
 ```
 
-Same URL, updated dashboard, still protected by Access policy.
+GitHub deploy trigger helper:
+
+```bash
+make dashboard-deploy-github
+```
+
+## GitHub setup required
+
+1. Repository Settings -> Pages:
+   - Source: **GitHub Actions**
+2. Actions permissions:
+   - Keep default permissions plus workflow-level `pages: write` and `id-token: write` (already in workflow).
 
 ## Notes
 
-- The scripts cannot create your Access policy automatically because that depends on your account identity setup.
-- Do not share the unprotected `*.pages.dev` URL before Access is active.
+- Cloudflare deployment is no longer required for dashboard publishing.
+- Existing Cloudflare resources can be removed once you confirm GitHub Pages serves the dashboard correctly.

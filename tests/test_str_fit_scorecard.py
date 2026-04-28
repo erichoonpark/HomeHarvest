@@ -73,6 +73,7 @@ def _assumptions(cap_workbook: Path) -> dict:
             "primary_zip_column": "primary_zip",
             "percentage_column": "current_neighborhood_percentage",
             "fail_open_if_missing_cap_data": False,
+            "strict_neighborhood_match": False,
         },
         "ranking_weights": {
             "quality": 30,
@@ -440,3 +441,100 @@ def test_palm_springs_priority_ranking_is_deterministic(tmp_path: Path):
     ordered = ps.sort_values(by="priority_rank")["property_id"].astype(str).tolist()
     assert ordered == ["PS2", "PS1"]
     assert bool(scored.loc[scored["property_id"] == "INDIO1", "is_palm_springs_priority_candidate"].iloc[0]) is False
+
+
+def test_priority_ranking_can_target_coachella_city_list(tmp_path: Path):
+    module = _load_module()
+    cap_workbook = tmp_path / "cap_by_zip.xlsx"
+    _write_cap_workbook(cap_workbook)
+    assumptions = _assumptions(cap_workbook)
+    assumptions["priority_ranking"]["target_city"] = "Coachella Valley"
+    assumptions["priority_ranking"]["target_cities"] = ["Palm Springs", "Bermuda Dunes"]
+    assumptions["priority_ranking"]["region_label"] = "Coachella Valley"
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "PS_CITY",
+                "status": "FOR_SALE",
+                "street": "10 Palm St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 900000,
+                "sqft": 2000,
+                "lot_sqft": 10000,
+                "beds": 3,
+                "full_baths": 2,
+                "str_organized_neighborhood": "Cap Eligible A",
+                "str_nbhd_under_cap_current": 1,
+                "private_pool_verified": True,
+                "is_private_pool": True,
+                "is_private_pool_known": True,
+                "property_url": "https://example.com/ps_city",
+                "coc_post_tax": 0.07,
+                "coc_pre_tax": 0.09,
+            },
+            {
+                "property_id": "BD_CITY",
+                "status": "FOR_SALE",
+                "street": "11 Dune St",
+                "city": "Bermuda Dunes",
+                "state": "CA",
+                "zip_code": "92264",
+                "list_price": 870000,
+                "sqft": 1900,
+                "lot_sqft": 11000,
+                "beds": 3,
+                "full_baths": 2,
+                "str_organized_neighborhood": "Cap Eligible A",
+                "str_nbhd_under_cap_current": 1,
+                "private_pool_verified": True,
+                "is_private_pool": True,
+                "is_private_pool_known": True,
+                "property_url": "https://example.com/bd_city",
+                "coc_post_tax": 0.06,
+                "coc_pre_tax": 0.08,
+            },
+        ]
+    )
+
+    scored = module.evaluate_str_fit(df, assumptions)
+    candidates = scored[scored["is_palm_springs_priority_candidate"].fillna(False).astype(bool)].copy()
+    assert set(candidates["property_id"].astype(str)) == {"PS_CITY", "BD_CITY"}
+
+
+def test_str_support_fails_closed_when_cap_data_missing_and_strict_neighborhood_match_enabled(tmp_path: Path):
+    module = _load_module()
+    cap_workbook = tmp_path / "missing_cap_workbook.xlsx"
+    assumptions = _assumptions(cap_workbook)
+    assumptions["geography"]["fail_open_if_missing_cap_data"] = False
+    assumptions["geography"]["strict_neighborhood_match"] = True
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "STRICT_FAIL",
+                "status": "FOR_SALE",
+                "street": "500 Main St",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 950000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1800,
+                "str_nbhd_under_cap_current": 1,
+                "str_organized_neighborhood": "Cap Eligible A",
+                "is_private_pool": True,
+                "is_private_pool_known": True,
+                "property_url": "https://example.com/strict-fail",
+            }
+        ]
+    )
+
+    scored = module.evaluate_str_fit(df, assumptions)
+    row = scored.iloc[0]
+    assert bool(row["eligible_str_supported"]) is False
+    assert bool(row["str_fit_pass"]) is False
+    assert "Neighborhood is not STR-supported under current cap" in str(row["str_fit_reasons_fail"])

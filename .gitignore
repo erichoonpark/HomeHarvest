@@ -5,3 +5,7 @@
 *.pyc
 /.ipynb_checkpoints/
 *.csv
+.env
+.env.local
+.env.*
+!.env.example

@@ -94,6 +94,11 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
     thresholds = raw.get("thresholds", {})
     requirements = raw.get("requirements", {})
     location = raw.get("location", {})
+    preferred_cities_default = ["Palm Springs", "Indio", "Bermuda Dunes"]
+    preferred_cities = list(location.get("preferred_cities", preferred_cities_default))
+    scope_zip_candidates = list(
+        location.get("scope_zip_candidates", ["92258", "92262", "92263", "92264", "92201", "92202", "92203"])
+    )
 
     hard_gates = raw.get("hard_gates", {})
     if not hard_gates:
@@ -173,9 +178,32 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
         normalized_priority_weights = default_priority_weights
     else:
         normalized_priority_weights = {k: (max(0.0, v) / total_weight) for k, v in normalized_priority_weights.items()}
+
+    target_city_raw = str(priority_ranking.get("target_city", "Palm Springs")).strip()
+    target_cities_raw = priority_ranking.get("target_cities", [])
+    normalized_target_cities: list[str] = []
+    if isinstance(target_cities_raw, list):
+        for city in target_cities_raw:
+            c = _safe_str(city).strip()
+            if c and c.lower() not in {v.lower() for v in normalized_target_cities}:
+                normalized_target_cities.append(c)
+    if not normalized_target_cities:
+        city_key = target_city_raw.lower()
+        if city_key in {"coachella valley", "coachella_valley", "coachella-valley", "all", "*"}:
+            normalized_target_cities = [c for c in preferred_cities if _safe_str(c).strip()]
+        elif target_city_raw:
+            normalized_target_cities = [target_city_raw]
+    if not normalized_target_cities:
+        normalized_target_cities = [c for c in preferred_cities_default]
+
+    region_label_default = "Coachella Valley" if len(normalized_target_cities) > 1 else normalized_target_cities[0]
+    region_label = _safe_str(priority_ranking.get("region_label"), region_label_default).strip() or region_label_default
+
     priority_ranking = {
         "enabled": bool(priority_ranking.get("enabled", True)),
-        "target_city": str(priority_ranking.get("target_city", "Palm Springs")),
+        "target_city": target_city_raw or "Palm Springs",
+        "target_cities": normalized_target_cities,
+        "region_label": region_label,
         "require_for_sale_status": bool(priority_ranking.get("require_for_sale_status", True)),
         "require_str_fit_pass": bool(priority_ranking.get("require_str_fit_pass", True)),
         "factor_weights": normalized_priority_weights,
@@ -195,14 +223,14 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
             "primary_zip_column": "primary_zip",
             "percentage_column": "current_neighborhood_percentage",
             "fail_open_if_missing_cap_data": True,
+            "strict_neighborhood_match": False,
         }
+    geography.setdefault("strict_neighborhood_match", False)
 
     normalized_location = {
         "enabled": bool(location.get("enabled", True)),
-        "preferred_cities": list(location.get("preferred_cities", ["Palm Springs", "Indio", "Bermuda Dunes"])),
-        "scope_zip_candidates": list(
-            location.get("scope_zip_candidates", ["92258", "92262", "92263", "92264", "92201", "92203"])
-        ),
+        "preferred_cities": preferred_cities,
+        "scope_zip_candidates": scope_zip_candidates,
     }
 
     return {
@@ -543,14 +571,24 @@ def _quality_fail_reason(row: pd.Series, co_group_keys: set[tuple[Any, Any, Any,
 
 def _compute_str_support(row: pd.Series, assumptions: dict[str, Any]) -> bool:
     under_cap = _safe_bool(row.get("str_nbhd_under_cap_current"))
-    if assumptions["hard_gates"].get("require_str_supported_neighborhood", True):
-        # Prefer explicit organized-neighborhood matching when available.
-        neighborhood = _canonicalize_neighborhood(row.get("str_organized_neighborhood") or row.get("neighborhoods"))
-        cap_nbhd_keys = assumptions.get("_derived_cap_eligible_neighborhood_keys", set())
-        if neighborhood and cap_nbhd_keys:
+    if not assumptions["hard_gates"].get("require_str_supported_neighborhood", True):
+        return True
+
+    geography = assumptions.get("geography", {})
+    strict_neighborhood_match = bool(geography.get("strict_neighborhood_match", False))
+    fail_open_if_missing_cap_data = bool(geography.get("fail_open_if_missing_cap_data", True))
+
+    neighborhood = _canonicalize_neighborhood(row.get("str_organized_neighborhood") or row.get("neighborhoods"))
+    cap_nbhd_keys = assumptions.get("_derived_cap_eligible_neighborhood_keys", set())
+
+    if cap_nbhd_keys:
+        if neighborhood:
             return neighborhood in cap_nbhd_keys
+        return under_cap if not strict_neighborhood_match else False
+
+    if fail_open_if_missing_cap_data and not strict_neighborhood_match:
         return under_cap
-    return True
+    return False
 
 
 def _compute_location_fit(row: pd.Series, assumptions: dict[str, Any]) -> bool:
@@ -820,7 +858,7 @@ def _score_row(
     output["is_palm_springs_priority_candidate"] = False
     output["priority_score"] = pd.NA
     output["priority_rank"] = pd.NA
-    output["priority_reason_summary"] = "Not evaluated for Palm Springs priority ranking"
+    output["priority_reason_summary"] = "Not evaluated for Coachella Valley priority ranking"
     return output
 
 
@@ -1137,10 +1175,25 @@ def _apply_palm_springs_priority(df: pd.DataFrame, assumptions: dict[str, Any]) 
         return df
 
     working = df.copy()
-    target_city = str(priority_cfg.get("target_city", "Palm Springs")).strip().lower()
-    in_city = (
-        working.get("city", pd.Series("", index=working.index)).astype(str).str.strip().str.lower().eq(target_city)
-    )
+    region_label = _safe_str(priority_cfg.get("region_label"), "Coachella Valley").strip() or "Coachella Valley"
+
+    target_cities_cfg = priority_cfg.get("target_cities", [])
+    target_cities: list[str] = []
+    if isinstance(target_cities_cfg, list):
+        target_cities = [str(c).strip().lower() for c in target_cities_cfg if str(c).strip()]
+    target_city_fallback = str(priority_cfg.get("target_city", "")).strip().lower()
+    if not target_cities:
+        if target_city_fallback in {"coachella valley", "coachella_valley", "coachella-valley", "all", "*"}:
+            target_cities = [
+                str(c).strip().lower()
+                for c in assumptions.get("location", {}).get("preferred_cities", [])
+                if str(c).strip()
+            ]
+        elif target_city_fallback:
+            target_cities = [target_city_fallback]
+
+    city_series = working.get("city", pd.Series("", index=working.index)).astype(str).str.strip().str.lower()
+    in_city = city_series.isin(set(target_cities)) if target_cities else pd.Series(True, index=working.index)
     for_sale = (
         working.get("status", pd.Series("", index=working.index)).astype(str).str.strip().str.upper().eq("FOR_SALE")
         if priority_cfg.get("require_for_sale_status", True)
@@ -1162,7 +1215,7 @@ def _apply_palm_springs_priority(df: pd.DataFrame, assumptions: dict[str, Any]) 
     working["is_palm_springs_priority_candidate"] = candidate_mask
     working["priority_score"] = pd.NA
     working["priority_rank"] = pd.NA
-    working["priority_reason_summary"] = "Not eligible for Palm Springs priority ranking"
+    working["priority_reason_summary"] = f"Not eligible for {region_label} priority ranking"
 
     if not candidate_mask.any():
         return working
