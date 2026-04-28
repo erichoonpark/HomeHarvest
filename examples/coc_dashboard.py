@@ -10,6 +10,7 @@ import pandas as pd
 DEFAULT_INPUT_PATH = Path("examples/zips/coc_scorecard.xlsx")
 DEFAULT_OUTPUT_PATH = Path("examples/zips/coc_dashboard.html")
 DEFAULT_HEALTH_REPORT_PATH = Path("examples/zips/incremental_health_report.json")
+DEFAULT_COC_ASSUMPTIONS_PATH = Path("examples/data/coc_assumptions.json")
 BUDGET_LUXURY_MAX_PRICE = 1_500_000.0
 BUDGET_LUXURY_TOP_N = 30
 DASHBOARD_MAX_LIST_PRICE = 1_500_000.0
@@ -292,6 +293,86 @@ def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
     return top_rows
 
 
+def _table_rows(df: pd.DataFrame, max_rows: int = 500) -> list[dict[str, Any]]:
+    if df.empty:
+        return []
+    rows: list[dict[str, Any]] = []
+    for _, row in df.head(max_rows).iterrows():
+        rows.append(
+            {
+                "property_id": _safe_str(row.get("property_id")),
+                "address": ", ".join(
+                    [
+                        p
+                        for p in [
+                            _safe_str(row.get("street")),
+                            _safe_str(row.get("city")),
+                            _safe_str(row.get("state")),
+                            _safe_str(row.get("zip_code")),
+                        ]
+                        if p
+                    ]
+                ),
+                "city": _safe_str(row.get("city")),
+                "list_price": _safe_float(row.get("list_price")),
+                "beds": _safe_float(row.get("beds")),
+                "full_baths": _safe_float(row.get("full_baths")),
+                "sqft": _safe_float(row.get("sqft")),
+                "coc_pre_tax": _safe_float(row.get("coc_pre_tax"), _safe_float(row.get("coc_med"))),
+                "coc_post_tax": _safe_float(row.get("coc_post_tax"), _safe_float(row.get("coc_med"))),
+                "annual_cash_flow_med": _safe_float(row.get("annual_cash_flow_med")),
+                "str_fit_score": _safe_float(row.get("str_fit_score")),
+                "property_url": _safe_str(row.get("property_url")),
+            }
+        )
+    return rows
+
+
+def _load_coc_assumptions_summary(path: str | Path = DEFAULT_COC_ASSUMPTIONS_PATH) -> dict[str, Any]:
+    assumptions_path = Path(path)
+    if not assumptions_path.exists():
+        return {}
+    try:
+        payload = json.loads(assumptions_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+
+    financing = payload.get("financing", {}) if isinstance(payload.get("financing"), dict) else {}
+    cost_model = payload.get("cost_model", {}) if isinstance(payload.get("cost_model"), dict) else {}
+    tax = payload.get("tax", {}) if isinstance(payload.get("tax"), dict) else {}
+    return {
+        "pre_tax_formula": "Pre-tax COC = annual_cash_flow_pre_tax / total_cash_cost_to_buy",
+        "post_tax_formula": "Post-tax COC = annual_cash_flow_post_tax / total_cash_cost_to_buy",
+        "note": (
+            "Post-tax cash flow adjusts pre-tax cash flow by tax impact, which is derived from taxable income "
+            "after deductible expenses (including interest and depreciation)."
+        ),
+        "caveat": "Underwriting estimate only. Not tax, legal, or investment advice.",
+        "tax": {
+            "effective_combined_tax_rate": _safe_float(tax.get("effective_combined_tax_rate"), 0.37),
+            "analysis_year": int(_safe_float(tax.get("analysis_year"), 1)),
+            "building_allocation_pct": _safe_float(tax.get("building_allocation_pct"), 0.80),
+            "standard_recovery_years": _safe_float(tax.get("standard_recovery_years"), 27.5),
+            "cost_seg_start_year": int(_safe_float(tax.get("cost_seg_start_year"), 2)),
+            "cost_seg_bonus_pct": _safe_float(tax.get("cost_seg_bonus_pct"), 0.20),
+        },
+        "financing": {
+            "down_payment_pct": _safe_float(financing.get("down_payment_pct"), 0.10),
+            "interest_rate_annual": _safe_float(financing.get("interest_rate_annual"), 0.0575),
+            "loan_term_years": int(_safe_float(financing.get("loan_term_years"), 30)),
+        },
+        "cost_model": {
+            "management_fee_pct": _safe_float(cost_model.get("management_fee_pct"), 0.18),
+            "capex_pct": _safe_float(cost_model.get("capex_pct"), 0.05),
+            "maintenance_pct": _safe_float(cost_model.get("maintenance_pct"), 0.06),
+            "vacancy_buffer_pct": _safe_float(cost_model.get("vacancy_buffer_pct"), 0.04),
+            "turnover_buffer_pct": _safe_float(cost_model.get("turnover_buffer_pct"), 0.03),
+        },
+    }
+
+
 def _normalized_map(series: pd.Series, *, inverse: bool = False) -> dict[int, float]:
     values = pd.to_numeric(series, errors="coerce")
     min_val = values.min(skipna=True)
@@ -516,8 +597,10 @@ def build_dashboard_payload(
 
     top_fit = _top_rows(fit, top_n)
     top_luxury = _top_rows(luxury, top_n)
+    table_rows = _table_rows(fit, max_rows=500)
     priority_rows = _palm_springs_priority_rows(scored, top_n)
     watchlist_rows = _pool_watchlist_rows(scored, top_n=30)
+    coc_assumptions_summary = _load_coc_assumptions_summary()
     total_pool_unknown_candidates = int(
         (
             scored.get("pool_enrichment_needed", pd.Series(False, index=scored.index)).fillna(False).astype(bool)
@@ -565,6 +648,7 @@ def build_dashboard_payload(
         "listings_pulled_at": listings_pulled_at,
         "top_properties": top_fit,
         "top_properties_luxury": top_luxury,
+        "table_rows": table_rows,
         "top_properties_palm_springs_priority": priority_rows,
         "top_properties_luxury_value_budget": budget_value_rows,
         "pool_verification_watchlist": watchlist_rows,
@@ -590,6 +674,7 @@ def build_dashboard_payload(
             "(tie-break: post-tax COC, then priority score). "
             "Dashboard view is capped at $1,500,000 list price."
         ),
+        "coc_assumptions_summary": coc_assumptions_summary,
         "homes": homes_fit,
         "total_houses_on_sale": int(len(scored)),
         "str_filter_snapshot": [
@@ -801,6 +886,86 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       padding: 10px;
       background: #fafcff;
     }
+    .controls {
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .controls input, .controls select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
+      background: #fff;
+      color: #0f172a;
+    }
+    .table-wrap {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: auto;
+      background: #fff;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 1050px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px;
+      text-align: left;
+      font-size: 13px;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+    th {
+      background: #f8fafc;
+      color: #0f172a;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    th[data-sort] {
+      cursor: pointer;
+    }
+    .pager {
+      margin-top: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .pager button {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+      color: #0f172a;
+      font-size: 12px;
+    }
+    .assumptions {
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    }
+    .assumptions p {
+      margin: 6px 0;
+      font-size: 13px;
+      color: #334155;
+    }
+    .assumptions .formula {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #0f172a;
+      font-size: 12px;
+    }
     .chip {
       display: inline-block;
       margin-left: 6px;
@@ -824,6 +989,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       .rank-head .field:last-child { grid-column: auto; }
       .metric-grid { grid-template-columns: 1fr; }
       .headline { font-size: 22px; }
+      .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -862,12 +1028,67 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       <div id="ranking-list" class="rank-list"></div>
       <div id="priority-empty" class="empty"></div>
     </section>
+    <section class="module">
+      <h2>STR-Pass Listings Table View</h2>
+      <p class="module-note">Sortable and filterable view for multi-listing comparison.</p>
+      <div id="table-controls" class="controls">
+        <input id="filter-city" type="text" placeholder="Filter city" />
+        <input id="filter-min-price" type="number" placeholder="Min price" />
+        <input id="filter-max-price" type="number" placeholder="Max price" />
+        <input id="filter-min-post-tax-coc" type="number" step="0.01" placeholder="Min post-tax COC (decimal)" />
+        <select id="sort-field">
+          <option value="coc_post_tax">Sort: Post-Tax COC</option>
+          <option value="coc_pre_tax">Sort: Pre-Tax COC</option>
+          <option value="annual_cash_flow_med">Sort: Cash Flow (Med)</option>
+          <option value="list_price">Sort: List Price</option>
+          <option value="beds">Sort: Beds</option>
+          <option value="full_baths">Sort: Baths</option>
+          <option value="str_fit_score">Sort: STR Fit Score</option>
+        </select>
+        <select id="rows-per-page">
+          <option value="10">10 rows</option>
+          <option value="25" selected>25 rows</option>
+          <option value="50">50 rows</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table id="listings-table">
+          <thead>
+            <tr>
+              <th data-sort="address">Address</th>
+              <th data-sort="city">City</th>
+              <th data-sort="list_price">List Price</th>
+              <th data-sort="beds">Beds</th>
+              <th data-sort="full_baths">Baths</th>
+              <th data-sort="sqft">SqFt</th>
+              <th data-sort="coc_pre_tax">Pre-Tax COC</th>
+              <th data-sort="coc_post_tax">Post-Tax COC</th>
+              <th data-sort="annual_cash_flow_med">Annual Cash Flow (Med)</th>
+              <th data-sort="str_fit_score">STR Fit Score</th>
+              <th>Link</th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <button id="prev-page" type="button">Previous</button>
+        <span id="table-page-status">Page 1 of 1</span>
+        <button id="next-page" type="button">Next</button>
+      </div>
+      <div id="table-empty" class="empty"></div>
+    </section>
+    <section class="module">
+      <h2>COC Assumptions and Formula Summary</h2>
+      <div id="assumptions-panel" class="assumptions"></div>
+    </section>
   </div>
 <script>
 const payload = __PAYLOAD_JSON__;
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (v) => `${(Number(v || 0) * 100).toFixed(2)}%`;
 const score100 = (v) => (Number(v || 0) * 100).toFixed(1);
+let tableState = { page: 1, pageSize: 25, sortField: 'coc_post_tax', sortDir: 'desc' };
 const pullTimestampFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Los_Angeles',
   year: 'numeric',
@@ -956,6 +1177,153 @@ function renderPriorityRanking() {
   });
 }
 
+function _toNum(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function getFilteredTableRows() {
+  const rows = payload.table_rows || [];
+  const cityNeedle = (document.getElementById('filter-city').value || '').trim().toLowerCase();
+  const minPrice = document.getElementById('filter-min-price').value;
+  const maxPrice = document.getElementById('filter-max-price').value;
+  const minPostTaxCoc = document.getElementById('filter-min-post-tax-coc').value;
+  const minPriceNum = minPrice === '' ? null : Number(minPrice);
+  const maxPriceNum = maxPrice === '' ? null : Number(maxPrice);
+  const minCocNum = minPostTaxCoc === '' ? null : Number(minPostTaxCoc);
+
+  return rows.filter((r) => {
+    if (cityNeedle && !(String(r.city || '').toLowerCase().includes(cityNeedle))) return false;
+    if (minPriceNum !== null && _toNum(r.list_price) < minPriceNum) return false;
+    if (maxPriceNum !== null && _toNum(r.list_price) > maxPriceNum) return false;
+    if (minCocNum !== null && _toNum(r.coc_post_tax) < minCocNum) return false;
+    return true;
+  });
+}
+
+function sortRows(rows) {
+  const field = tableState.sortField;
+  const dir = tableState.sortDir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const av = a[field];
+    const bv = b[field];
+    if (typeof av === 'string' || typeof bv === 'string') {
+      return dir * String(av || '').localeCompare(String(bv || ''));
+    }
+    const delta = _toNum(av) - _toNum(bv);
+    if (delta !== 0) return dir * delta;
+    return String(a.property_id || '').localeCompare(String(b.property_id || ''));
+  });
+}
+
+function renderTable() {
+  const body = document.getElementById('table-body');
+  const empty = document.getElementById('table-empty');
+  const status = document.getElementById('table-page-status');
+  body.innerHTML = '';
+
+  const filtered = sortRows(getFilteredTableRows());
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / tableState.pageSize));
+  tableState.page = Math.max(1, Math.min(tableState.page, pages));
+  const start = (tableState.page - 1) * tableState.pageSize;
+  const pageRows = filtered.slice(start, start + tableState.pageSize);
+
+  if (!pageRows.length) {
+    empty.style.display = 'block';
+    empty.textContent = 'No listings match the current filters.';
+  } else {
+    empty.style.display = 'none';
+  }
+
+  pageRows.forEach((r) => {
+    const tr = document.createElement('tr');
+    const link = r.property_url ? `<a class="link" href="${r.property_url}">Open</a>` : '<span style="color:#94a3b8">n/a</span>';
+    tr.innerHTML = `
+      <td>${r.address || 'n/a'}</td>
+      <td>${r.city || 'n/a'}</td>
+      <td>${currency.format(_toNum(r.list_price))}</td>
+      <td>${_toNum(r.beds).toFixed(0)}</td>
+      <td>${_toNum(r.full_baths).toFixed(1)}</td>
+      <td>${_toNum(r.sqft).toLocaleString()}</td>
+      <td>${pct(_toNum(r.coc_pre_tax))}</td>
+      <td>${pct(_toNum(r.coc_post_tax))}</td>
+      <td>${currency.format(_toNum(r.annual_cash_flow_med))}</td>
+      <td>${_toNum(r.str_fit_score).toFixed(0)}</td>
+      <td>${link}</td>
+    `;
+    body.appendChild(tr);
+  });
+
+  status.textContent = `Page ${tableState.page} of ${pages} (${total.toLocaleString()} rows)`;
+  document.getElementById('prev-page').disabled = tableState.page <= 1;
+  document.getElementById('next-page').disabled = tableState.page >= pages;
+}
+
+function renderAssumptionsPanel() {
+  const panel = document.getElementById('assumptions-panel');
+  const data = payload.coc_assumptions_summary || {};
+  if (!Object.keys(data).length) {
+    panel.innerHTML = '<p>Assumptions summary unavailable.</p>';
+    return;
+  }
+
+  const tax = data.tax || {};
+  const financing = data.financing || {};
+  const cost = data.cost_model || {};
+
+  panel.innerHTML = `
+    <p class="formula">${data.pre_tax_formula || ''}</p>
+    <p class="formula">${data.post_tax_formula || ''}</p>
+    <p>${data.note || ''}</p>
+    <p><strong>Tax Inputs:</strong> Effective tax ${(100 * _toNum(tax.effective_combined_tax_rate)).toFixed(1)}%, analysis year ${_toNum(tax.analysis_year).toFixed(0)}, building allocation ${(100 * _toNum(tax.building_allocation_pct)).toFixed(1)}%, recovery ${_toNum(tax.standard_recovery_years).toFixed(1)} years, cost-seg start year ${_toNum(tax.cost_seg_start_year).toFixed(0)}, cost-seg bonus ${(100 * _toNum(tax.cost_seg_bonus_pct)).toFixed(1)}%.</p>
+    <p><strong>Financing Inputs:</strong> Down payment ${(100 * _toNum(financing.down_payment_pct)).toFixed(1)}%, interest ${(100 * _toNum(financing.interest_rate_annual)).toFixed(2)}%, loan term ${_toNum(financing.loan_term_years).toFixed(0)} years.</p>
+    <p><strong>Core Opex Ratios:</strong> Management ${(100 * _toNum(cost.management_fee_pct)).toFixed(1)}%, capex ${(100 * _toNum(cost.capex_pct)).toFixed(1)}%, maintenance ${(100 * _toNum(cost.maintenance_pct)).toFixed(1)}%, vacancy buffer ${(100 * _toNum(cost.vacancy_buffer_pct)).toFixed(1)}%, turnover buffer ${(100 * _toNum(cost.turnover_buffer_pct)).toFixed(1)}%.</p>
+    <p>${data.caveat || ''}</p>
+  `;
+}
+
+function bindTableControls() {
+  ['filter-city', 'filter-min-price', 'filter-max-price', 'filter-min-post-tax-coc'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', () => {
+      tableState.page = 1;
+      renderTable();
+    });
+  });
+  document.getElementById('rows-per-page').addEventListener('change', (e) => {
+    tableState.pageSize = Number(e.target.value || 25);
+    tableState.page = 1;
+    renderTable();
+  });
+  document.getElementById('sort-field').addEventListener('change', (e) => {
+    tableState.sortField = e.target.value || 'coc_post_tax';
+    tableState.page = 1;
+    renderTable();
+  });
+  document.querySelectorAll('th[data-sort]').forEach((th) => {
+    th.addEventListener('click', () => {
+      const field = th.getAttribute('data-sort');
+      if (!field) return;
+      if (tableState.sortField === field) {
+        tableState.sortDir = tableState.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        tableState.sortField = field;
+        tableState.sortDir = 'desc';
+      }
+      tableState.page = 1;
+      renderTable();
+    });
+  });
+  document.getElementById('prev-page').addEventListener('click', () => {
+    tableState.page = Math.max(1, tableState.page - 1);
+    renderTable();
+  });
+  document.getElementById('next-page').addEventListener('click', () => {
+    tableState.page += 1;
+    renderTable();
+  });
+}
+
 function init() {
   document.getElementById('total-ingested').textContent = String(payload.total_ingested || 0);
   document.getElementById('total-fit').textContent = String(payload.total_str_fit_passed || 0);
@@ -976,6 +1344,9 @@ function init() {
   });
 
   renderPriorityRanking();
+  bindTableControls();
+  renderTable();
+  renderAssumptionsPanel();
 }
 
 init();

@@ -145,6 +145,10 @@ def test_build_dashboard_payload_has_widgets_data():
     assert "ai_insight_potential" in payload["homes"][0]
     assert "ai_insight_risk" in payload["homes"][0]
     assert "top_properties_luxury" in payload
+    assert "table_rows" in payload
+    assert len(payload["table_rows"]) == 1
+    assert "coc_assumptions_summary" in payload
+    assert "pre_tax_formula" in payload["coc_assumptions_summary"]
     assert "top_properties_palm_springs_priority" in payload
     assert "total_palm_springs_priority_candidates" in payload
     assert "total_palm_springs_strict_pass" in payload
@@ -190,9 +194,20 @@ def test_render_dashboard_html_contains_expected_sections():
     assert "Ranking Driver" in html
     assert "AI Property Insight" in html
     assert "View Listing" in html
+    assert "STR-Pass Listings Table View" in html
+    assert "COC Assumptions and Formula Summary" in html
+    assert "filter-city" in html
+    assert "rows-per-page" in html
+    assert "sort-field" in html
+    assert 'id="listings-table"' in html
+    assert 'id="table-body"' in html
+    assert "Page 1 of 1" in html
+    assert "Pre-tax COC = annual_cash_flow_pre_tax / total_cash_cost_to_buy" in html
+    assert "Post-tax COC = annual_cash_flow_post_tax / total_cash_cost_to_buy" in html
+    assert "Underwriting estimate only. Not tax, legal, or investment advice." in html
     assert 'target="_blank"' not in html
     assert "STR Filter Snapshot" in html
-    assert "<table" not in html
+    assert "<table" in html
     assert "top5-potential-body" not in html
     assert "pool-watchlist-body" not in html
     assert "home-select" not in html
@@ -375,6 +390,9 @@ def test_render_dashboard_html_wires_new_kpi_dom_ids():
     assert "payload.new_listings_today" in html
     assert "payload.fetched_rows_today" in html
     assert "payload.listings_pulled_at" in html
+    assert "renderTable" in html
+    assert "bindTableControls" in html
+    assert "renderAssumptionsPanel" in html
 
 
 def test_top_properties_are_str_fit_only_and_deterministic_tiebreak():
