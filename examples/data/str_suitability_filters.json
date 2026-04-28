@@ -7,10 +7,10 @@
     "require_beds_baths": true,
     "require_location": true,
     "require_geo_cap_zip": true,
-    "min_beds": 2,
+    "min_beds": 3,
     "min_full_baths": 2,
-    "min_list_price": 100000,
-    "max_list_price": 3000000
+    "min_list_price": 150000,
+    "max_list_price": 1500000
   },
   "location": {
     "enabled": true,
@@ -42,13 +42,13 @@
     "strict_neighborhood_match": true
   },
   "ranking_weights": {
-    "quality": 30,
+    "quality": 35,
     "str_support": 25,
     "beds_baths": 15,
     "price_range": 5,
-    "location": 5,
-    "geo_cap_zip": 10,
-    "pool_signal": 20
+    "location": 2,
+    "geo_cap_zip": 13,
+    "pool_signal": 25
   },
   "pool_verification": {
     "allow_high_conf_inferred_private": true,
@@ -86,14 +86,14 @@
       "lot_size": 0.25,
       "neighborhood_support": 0.35
     },
-    "tie_break_metrics": ["coc_post_tax", "coc_pre_tax", "property_id"]
+    "tie_break_metrics": ["coc_post_tax", "coc_med", "coc_pre_tax", "property_id"]
   },
   "shortlist": {
     "enabled": true,
     "target_pass_rate_min": 0.1,
     "target_pass_rate_max": 0.2,
     "target_pass_rate_target": 0.15,
-    "ranking_metric": "coc_med",
+    "ranking_metric": "coc_post_tax",
     "ranking_direction": "desc",
     "coc_assumptions_path": "examples/data/coc_assumptions.json"
   }

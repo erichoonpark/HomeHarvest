@@ -1,12 +1,12 @@
 {
-  "allow_empty_incremental": false,
-  "batch_run_at": "2026-04-28T08:37:18.179314-07:00",
+  "allow_empty_incremental": true,
+  "batch_run_at": "2026-04-28T09:23:02.104769-07:00",
   "combined_total_rows": 2483,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
-    "combined_csv": "/home/runner/work/HomeHarvest/HomeHarvest/examples/zips/combined.csv",
-    "combined_xlsx": "/home/runner/work/HomeHarvest/HomeHarvest/examples/zips/combined.xlsx"
+    "combined_csv": "/Users/ericpark/projects/HomeHarvest/examples/zips/combined.csv",
+    "combined_xlsx": "/Users/ericpark/projects/HomeHarvest/examples/zips/combined.xlsx"
   },
   "status": "success",
   "summary": {
