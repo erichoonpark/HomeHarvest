@@ -1,4 +1,7 @@
-.PHONY: dashboard-publish dashboard-deploy-github
+.PHONY: test dashboard-publish dashboard-deploy-github
+
+test:
+	bash ./scripts/test.sh
 
 dashboard-publish:
 	./scripts/build_dashboard_publish.sh

@@ -587,16 +587,19 @@ def build_dashboard_payload(
         "pool_watchlist_note": "Not STR-pass yet; awaiting private-pool verification.",
         "priority_ranking_note": (
             "Coachella Valley STR-pass listings sorted by pre-tax COC "
-            "(tie-break: post-tax COC, then priority score)."
+            "(tie-break: post-tax COC, then priority score). "
+            "Dashboard view is capped at $1,500,000 list price."
         ),
         "homes": homes_fit,
         "total_houses_on_sale": int(len(scored)),
         "str_filter_snapshot": [
             "Quality checks required",
             "STR-supported neighborhood required",
+            "Private pool required (verified/inferred high-confidence)",
             "Beds/Baths minimum: 2+/2+",
-            "List price range: $100,000 to $1,500,000",
-            "Preferred cities: Palm Springs, Indio, Bermuda Dunes",
+            "STR hard-gate list price range: $100,000 to $3,000,000",
+            "Dashboard review queue cap: <= $1,500,000 list price",
+            "Preferred cities: Palm Springs, North Palm Springs, Cathedral City, Thousand Palms, Indio, Bermuda Dunes, Coachella, La Quinta, Palm Desert, Rancho Mirage, Desert Hot Springs, Indian Wells",
             "ZIP must be in under-cap STR geography",
         ],
     }

@@ -24,6 +24,25 @@ pip install -U homeharvest
 ```
   _Python version >= [3.9](https://www.python.org/downloads/release/python-3100/) required_
 
+## Development Test Setup
+
+Use a local virtual environment so test commands do not depend on global PATH tools:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -U pip
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install pytest
+```
+
+Run tests with either command:
+
+```bash
+make test
+# or
+./scripts/test.sh
+```
+
 ## Usage
 
 ### Python
@@ -318,7 +337,7 @@ Property
 
 ├── Agent/Broker/Office Info (Pydantic/Raw):
 │ ├── agent_uuid
-│ ├── agent_name  
+│ ├── agent_name
 │ ├── agent_email
 │ ├── agent_phone
 │ ├── agent_state_license
