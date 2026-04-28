@@ -314,10 +314,22 @@ def _table_rows(df: pd.DataFrame, max_rows: int = 500) -> list[dict[str, Any]]:
                     ]
                 ),
                 "city": _safe_str(row.get("city")),
+                "neighborhood": _safe_str(
+                    row.get("neighborhood")
+                    or row.get("str_organized_neighborhood")
+                    or row.get("str_neighborhood")
+                    or row.get("neighborhoods")
+                ),
                 "list_price": _safe_float(row.get("list_price")),
                 "beds": _safe_float(row.get("beds")),
                 "full_baths": _safe_float(row.get("full_baths")),
                 "sqft": _safe_float(row.get("sqft")),
+                "lot_sqft": _safe_float(row.get("lot_sqft")),
+                "price_per_sqft": (
+                    _safe_float(row.get("list_price")) / _safe_float(row.get("sqft"))
+                    if _safe_float(row.get("sqft")) > 0
+                    else 0.0
+                ),
                 "coc_pre_tax": _safe_float(row.get("coc_pre_tax"), _safe_float(row.get("coc_med"))),
                 "coc_post_tax": _safe_float(row.get("coc_post_tax"), _safe_float(row.get("coc_med"))),
                 "annual_cash_flow_med": _safe_float(row.get("annual_cash_flow_med")),
@@ -678,11 +690,10 @@ def build_dashboard_payload(
         "homes": homes_fit,
         "total_houses_on_sale": int(len(scored)),
         "str_filter_snapshot": [
-            "Quality checks required",
             "STR-supported neighborhood required",
             "Private pool required (verified/inferred high-confidence)",
             "Beds/Baths minimum: 2+/2+",
-            "STR hard-gate list price range: $100,000 to $3,000,000",
+            "STR hard-gate list price range: $150,000 to $1,500,000",
             "Dashboard review queue cap: <= $1,500,000 list price",
             "Preferred cities: Palm Springs, North Palm Springs, Cathedral City, Thousand Palms, Indio, Bermuda Dunes, Coachella, La Quinta, Palm Desert, Rancho Mirage, Desert Hot Springs, Indian Wells",
             "ZIP must be in under-cap STR geography",
@@ -1040,6 +1051,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
           <option value="coc_post_tax">Sort: Post-Tax COC</option>
           <option value="coc_pre_tax">Sort: Pre-Tax COC</option>
           <option value="annual_cash_flow_med">Sort: Cash Flow (Med)</option>
+          <option value="price_per_sqft">Sort: Price / SqFt</option>
           <option value="list_price">Sort: List Price</option>
           <option value="beds">Sort: Beds</option>
           <option value="full_baths">Sort: Baths</option>
@@ -1057,10 +1069,13 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
             <tr>
               <th data-sort="address">Address</th>
               <th data-sort="city">City</th>
+              <th data-sort="neighborhood">Neighborhood</th>
               <th data-sort="list_price">List Price</th>
+              <th data-sort="price_per_sqft">Price / SqFt</th>
               <th data-sort="beds">Beds</th>
               <th data-sort="full_baths">Baths</th>
               <th data-sort="sqft">SqFt</th>
+              <th data-sort="lot_sqft">Lot SqFt</th>
               <th data-sort="coc_pre_tax">Pre-Tax COC</th>
               <th data-sort="coc_post_tax">Post-Tax COC</th>
               <th data-sort="annual_cash_flow_med">Annual Cash Flow (Med)</th>
@@ -1242,10 +1257,13 @@ function renderTable() {
     tr.innerHTML = `
       <td>${r.address || 'n/a'}</td>
       <td>${r.city || 'n/a'}</td>
+      <td>${r.neighborhood || 'n/a'}</td>
       <td>${currency.format(_toNum(r.list_price))}</td>
+      <td>${currency.format(_toNum(r.price_per_sqft))}</td>
       <td>${_toNum(r.beds).toFixed(0)}</td>
       <td>${_toNum(r.full_baths).toFixed(1)}</td>
       <td>${_toNum(r.sqft).toLocaleString()}</td>
+      <td>${_toNum(r.lot_sqft).toLocaleString()}</td>
       <td>${pct(_toNum(r.coc_pre_tax))}</td>
       <td>${pct(_toNum(r.coc_post_tax))}</td>
       <td>${currency.format(_toNum(r.annual_cash_flow_med))}</td>

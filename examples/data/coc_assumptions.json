@@ -1,22 +1,22 @@
 {
   "financing": {
-    "down_payment_pct": 0.10,
-    "interest_rate_annual": 0.0575,
+    "down_payment_pct": 0.20,
+    "interest_rate_annual": 0.0675,
     "loan_term_years": 30
   },
   "cost_model": {
     "closing_cost_pct": 0.025,
     "furnishing_pct": 0.08,
-    "rehab_reserve_pct": 0.03,
-    "initial_reserve_pct": 0.01,
+    "rehab_reserve_pct": 0.04,
+    "initial_reserve_pct": 0.015,
     "management_fee_pct": 0.18,
-    "capex_pct": 0.05,
-    "maintenance_pct": 0.06,
-    "vacancy_buffer_pct": 0.04,
+    "capex_pct": 0.06,
+    "maintenance_pct": 0.07,
+    "vacancy_buffer_pct": 0.06,
     "turnover_buffer_pct": 0.03,
     "insurance_rate_pct_annual": 0.004,
     "property_tax_rate_pct_annual": 0.012,
-    "utilities_monthly": 650
+    "utilities_monthly": 700
   },
   "scenario_routing": {
     "luxury_price_threshold": 2000000
@@ -44,9 +44,9 @@
     "mtr_occupancy": 0.72
   },
   "heloc": {
-    "enabled": true,
+    "enabled": false,
     "interest_only": true,
-    "rate_annual": 0.085,
+    "rate_annual": 0.095,
     "draw_strategy": "down_payment_and_closing"
   },
   "tax": {
@@ -60,19 +60,19 @@
   "ranking_metric": "coc_post_tax",
   "scenario_presets": {
     "palm_springs_normal": {
-      "low": { "adr": 340, "occupancy_rate": 0.52 },
-      "med": { "adr": 430, "occupancy_rate": 0.62 },
-      "high": { "adr": 520, "occupancy_rate": 0.72 }
+      "low": { "adr": 300, "occupancy_rate": 0.45 },
+      "med": { "adr": 390, "occupancy_rate": 0.58 },
+      "high": { "adr": 470, "occupancy_rate": 0.68 }
     },
     "palm_springs_luxury": {
-      "low": { "adr": 950, "occupancy_rate": 0.45 },
-      "med": { "adr": 1250, "occupancy_rate": 0.58 },
-      "high": { "adr": 1650, "occupancy_rate": 0.70 }
+      "low": { "adr": 850, "occupancy_rate": 0.40 },
+      "med": { "adr": 1100, "occupancy_rate": 0.54 },
+      "high": { "adr": 1450, "occupancy_rate": 0.66 }
     },
     "fallback": {
-      "low": { "adr": 260, "occupancy_rate": 0.48 },
-      "med": { "adr": 330, "occupancy_rate": 0.58 },
-      "high": { "adr": 420, "occupancy_rate": 0.68 }
+      "low": { "adr": 220, "occupancy_rate": 0.43 },
+      "med": { "adr": 300, "occupancy_rate": 0.54 },
+      "high": { "adr": 380, "occupancy_rate": 0.64 }
     }
   }
 }

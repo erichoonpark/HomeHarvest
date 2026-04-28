@@ -508,6 +508,8 @@ def _resolve_private_pool(row: pd.Series, assumptions: dict[str, Any]) -> tuple[
             "Private pool unknown",
         )
 
+    inferred_private_pool, inferred_private_pool_known, inferred_source = _infer_pool(row)
+
     if "is_private_pool" in row.index and "is_private_pool_known" in row.index:
         is_private_pool = _safe_bool(row.get("is_private_pool"))
         is_private_pool_known = _safe_bool(row.get("is_private_pool_known"))
@@ -524,13 +526,12 @@ def _resolve_private_pool(row: pd.Series, assumptions: dict[str, Any]) -> tuple[
     if is_private_pool_known and not is_private_pool:
         return False, True, False, source, 0.0, "high", "Private pool not present"
 
-    inferred_pool, inferred_known, inferred_source = _infer_pool(row)
-    if inferred_pool:
-        conf = "high" if (allow_high_conf_inferred and not inferred_known) else "medium"
+    if inferred_private_pool:
+        conf = "high" if (allow_high_conf_inferred and not inferred_private_pool_known) else "medium"
         verified = bool(allow_high_conf_inferred and conf in high_conf_levels)
         return (
             verified,
-            bool(inferred_known),
+            bool(inferred_private_pool_known),
             verified,
             f"{source}|{inferred_source}",
             0.5,
@@ -1058,7 +1059,15 @@ def _load_coc_scores(df: pd.DataFrame, assumptions: dict[str, Any]) -> pd.DataFr
     if scored.empty or "property_id" not in scored.columns:
         return df
 
-    merge_cols = ["property_id", "coc_low", "coc_med", "coc_high", "annual_cash_flow_med"]
+    merge_cols = [
+        "property_id",
+        "coc_low",
+        "coc_med",
+        "coc_high",
+        "coc_pre_tax",
+        "coc_post_tax",
+        "annual_cash_flow_med",
+    ]
     available = [c for c in merge_cols if c in scored.columns]
     scored_small = scored[available].copy()
     return df.merge(scored_small, on="property_id", how="left", suffixes=("", "_calc"))
@@ -1090,10 +1099,13 @@ def _apply_shortlist(df: pd.DataFrame, assumptions: dict[str, Any]) -> pd.DataFr
     ranking_metric = str(shortlist_cfg.get("ranking_metric", "coc_med"))
     direction = str(shortlist_cfg.get("ranking_direction", "desc")).strip().lower()
 
-    metric = pd.to_numeric(working.get(ranking_metric), errors="coerce")
+    if ranking_metric in working.columns:
+        metric = pd.to_numeric(working[ranking_metric], errors="coerce")
+    else:
+        metric = pd.Series(pd.NA, index=working.index, dtype="Float64")
     if metric.notna().sum() == 0:
         ranking_metric = "str_fit_score"
-        metric = pd.to_numeric(working.get("str_fit_score"), errors="coerce")
+        metric = pd.to_numeric(working["str_fit_score"], errors="coerce")
         direction = "desc"
 
     eligible = working[eligible_mask].copy()
