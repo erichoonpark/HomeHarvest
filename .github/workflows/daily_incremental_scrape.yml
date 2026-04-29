@@ -53,6 +53,7 @@ jobs:
         run: >
           poetry run python examples/daily_str_pipeline.py
           --mode incremental
+          --allow-empty-incremental
           --health-report-output "$HEALTH_REPORT_PATH"
 
       - name: Upload incremental health report
@@ -263,36 +264,21 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create or update pull request
-        id: create_pr
+      - name: Commit and push daily updates to master
         if: steps.detect_changes.outputs.changed == 'true'
-        continue-on-error: true
-        uses: peter-evans/create-pull-request@v6
-        with:
-          commit-message: "chore(data): daily incremental listings update"
-          title: "chore(data): daily incremental listings update"
-          body: |
-            Automated daily incremental HomeHarvest update.
-
-            - Mode: incremental daily pipeline
-            - Updated files:
-              - examples/zips/combined.csv
-              - examples/zips/combined.xlsx
-              - examples/zips/str_suitability_filter.xlsx
-              - examples/zips/coc_scorecard.xlsx
-              - examples/zips/coc_dashboard.html
-              - examples/zips/incremental_health_report.json
-          branch: automation/daily-incremental-scrape
-          delete-branch: false
-          add-paths: |
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
             examples/zips/combined.csv
             examples/zips/combined.xlsx
             examples/zips/str_suitability_filter.xlsx
             examples/zips/coc_scorecard.xlsx
             examples/zips/coc_dashboard.html
             examples/zips/incremental_health_report.json
-
-      - name: Report PR creation fallback
-        if: steps.detect_changes.outputs.changed == 'true' && steps.create_pr.outcome == 'failure'
-        run: |
-          echo "::warning::Scrape data was generated and branch push likely succeeded, but automated PR creation is blocked by repository policy. Enable 'Allow GitHub Actions to create and approve pull requests' or create the PR manually from branch automation/daily-incremental-scrape."
+          if git diff --cached --quiet; then
+            echo "No staged changes after add-paths filter."
+            exit 0
+          fi
+          git commit -m "chore(data): daily incremental listings update"
+          git push origin HEAD:master

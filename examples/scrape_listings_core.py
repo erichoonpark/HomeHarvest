@@ -991,19 +991,35 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
 
     frames: list[pd.DataFrame] = []
     zip_results: list[dict[str, object]] = []
+    scrape_error_count = 0
+    scrape_attempt_count = 0
     for zip_code in STR_FRIENDLY_ZIP_CODES:
         listing_type_results: list[dict[str, object]] = []
         for listing_type in LISTING_TYPES_INCREMENTAL:
-            df = get_property_details(
-                zip_code,
-                listing_type,
-                date_from=window_start,
-                date_to=window_end,
-            )
+            scrape_attempt_count += 1
+            error_message: str | None = None
+            try:
+                df = get_property_details(
+                    zip_code,
+                    listing_type,
+                    date_from=window_start,
+                    date_to=window_end,
+                )
+            except Exception as exc:
+                # Continue other ZIP/listing-type scrapes so one transient upstream
+                # failure does not abort the entire incremental pipeline.
+                scrape_error_count += 1
+                error_message = f"{type(exc).__name__}: {exc}"
+                print(
+                    f"[incremental-scrape-warning] zip={zip_code} listing_type={listing_type} "
+                    f"failed with {error_message}"
+                )
+                df = pd.DataFrame()
             listing_type_results.append(
                 {
                     "listing_type": listing_type,
                     "fetched_rows": int(len(df)),
+                    "error": error_message,
                 }
             )
             if not df.empty:
@@ -1053,7 +1069,12 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
     )
 
     failure_reason = None
-    if summary["deduped_rows"] == 0 and not args.allow_empty_incremental:
+    if scrape_attempt_count > 0 and scrape_error_count == scrape_attempt_count:
+        failure_reason = (
+            "Incremental scrape failed for all ZIP/listing-type requests "
+            f"for window {window_start.isoformat()} -> {window_end.isoformat()}."
+        )
+    elif summary["deduped_rows"] == 0 and not args.allow_empty_incremental:
         failure_reason = (
             "Incremental scrape fetched zero usable listings "
             f"for window {window_start.isoformat()} -> {window_end.isoformat()}."
