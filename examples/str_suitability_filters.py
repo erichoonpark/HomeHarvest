@@ -641,6 +641,114 @@ def _derive_cap_eligible_zip_codes(assumptions: dict[str, Any]) -> tuple[set[str
     return eligible, "ok"
 
 
+def _build_zip_cap_status_map(
+    assumptions: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], pd.DataFrame, str]:
+    geography = assumptions.get("geography", {})
+    if not geography.get("enabled", True):
+        return {}, pd.DataFrame(), "geography_disabled"
+
+    workbook_path = Path(str(geography.get("neighborhood_cap_workbook", DEFAULT_CAP_WORKBOOK_PATH)))
+    if not workbook_path.exists():
+        return {}, pd.DataFrame(), "missing_cap_workbook"
+
+    percentage_col = str(geography.get("percentage_column", "current_neighborhood_percentage"))
+    projected_col = str(geography.get("projected_percentage_column", "projected_neighborhood_percentage"))
+    zip_codes_col = str(geography.get("zip_codes_column", "zip_codes"))
+    primary_zip_col = str(geography.get("primary_zip_column", "primary_zip"))
+    neighborhood_col = str(geography.get("organized_neighborhood_column", "organized_neighborhood"))
+    cap_max = float(geography.get("cap_percentage_max", 0.20))
+
+    table = pd.read_excel(workbook_path)
+    if percentage_col not in table.columns:
+        return {}, pd.DataFrame(), "missing_cap_percentage_column"
+
+    scope_candidates = {_normalize_zip(v) for v in assumptions.get("location", {}).get("scope_zip_candidates", []) if v}
+    per_zip_rows: dict[str, list[dict[str, Any]]] = {}
+
+    for _, row in table.iterrows():
+        current_pct = _safe_float(row.get(percentage_col), float("nan"))
+        projected_pct = (
+            _safe_float(row.get(projected_col), float("nan")) if projected_col in table.columns else float("nan")
+        )
+        zip_candidates: set[str] = set()
+
+        if zip_codes_col in table.columns:
+            raw = _safe_str(row.get(zip_codes_col))
+            for token in raw.split("|"):
+                z = _normalize_zip(token)
+                if z:
+                    zip_candidates.add(z)
+        z_primary = _normalize_zip(row.get(primary_zip_col))
+        if z_primary:
+            zip_candidates.add(z_primary)
+
+        if scope_candidates:
+            zip_candidates = {z for z in zip_candidates if z in scope_candidates}
+        if not zip_candidates:
+            continue
+
+        neighborhood_name = _safe_str(row.get(neighborhood_col)).strip() if neighborhood_col in table.columns else ""
+        for zip_code in zip_candidates:
+            per_zip_rows.setdefault(zip_code, []).append(
+                {
+                    "organized_neighborhood": neighborhood_name or pd.NA,
+                    "current_pct": current_pct,
+                    "projected_pct": projected_pct,
+                    "is_under_cap": bool(pd.notna(current_pct) and current_pct < cap_max),
+                }
+            )
+
+    records: list[dict[str, Any]] = []
+    for zip_code in sorted(scope_candidates or per_zip_rows.keys()):
+        rows = per_zip_rows.get(zip_code, [])
+        current_values = [float(r["current_pct"]) for r in rows if pd.notna(r["current_pct"])]
+        projected_values = [float(r["projected_pct"]) for r in rows if pd.notna(r["projected_pct"])]
+        under_cap_rows = [r for r in rows if r["is_under_cap"]]
+        all_rows = len(rows)
+        under_cap_count = len(under_cap_rows)
+        allowed = under_cap_count > 0
+
+        if rows:
+            status = "allowed_any_under_cap" if allowed else "disallowed_all_at_or_above_cap"
+        else:
+            status = "no_neighborhood_rows_in_workbook"
+
+        records.append(
+            {
+                "zip_code": zip_code,
+                "zip_cap_status": status,
+                "zip_allowed_for_str": allowed,
+                "cap_threshold_max": cap_max,
+                "mapped_neighborhood_count": all_rows,
+                "under_cap_neighborhood_count": under_cap_count,
+                "current_pct_min": min(current_values) if current_values else pd.NA,
+                "current_pct_max": max(current_values) if current_values else pd.NA,
+                "current_pct_avg": (sum(current_values) / len(current_values)) if current_values else pd.NA,
+                "projected_pct_min": min(projected_values) if projected_values else pd.NA,
+                "projected_pct_max": max(projected_values) if projected_values else pd.NA,
+                "projected_pct_avg": (sum(projected_values) / len(projected_values)) if projected_values else pd.NA,
+                "under_cap_neighborhoods": (
+                    "|".join(
+                        sorted(
+                            {
+                                _safe_str(r.get("organized_neighborhood")).strip()
+                                for r in under_cap_rows
+                                if _safe_str(r.get("organized_neighborhood")).strip()
+                            }
+                        )
+                    )
+                    if under_cap_rows
+                    else pd.NA
+                ),
+            }
+        )
+
+    mapping_df = pd.DataFrame(records).sort_values("zip_code", ignore_index=True)
+    mapping = {str(r["zip_code"]): r for r in records}
+    return mapping, mapping_df, "ok"
+
+
 def _derive_cap_eligible_neighborhood_keys(assumptions: dict[str, Any]) -> tuple[set[str], str]:
     geography = assumptions.get("geography", {})
     if not geography.get("enabled", True):
@@ -715,8 +823,13 @@ def _compute_geo_cap_zip(
             return True, "cap_data_unavailable_fail_open"
         return False, "cap_data_unavailable_fail_closed"
 
+    zip_cap_mapping = assumptions.get("_derived_zip_cap_mapping", {})
+    zip_meta = zip_cap_mapping.get(zip_code) if isinstance(zip_cap_mapping, dict) else None
+
     if zip_code in cap_eligible_zips:
         return True, "zip_has_under_cap_neighborhood"
+    if isinstance(zip_meta, dict) and str(zip_meta.get("zip_cap_status", "")).strip():
+        return False, str(zip_meta["zip_cap_status"])
     return False, "zip_not_in_under_cap_set"
 
 
@@ -863,6 +976,10 @@ def _score_dataframe(rows: pd.DataFrame, assumptions: dict[str, Any]) -> pd.Data
     if rows.empty:
         return pd.DataFrame()
     cap_eligible_zips, cap_status = _derive_cap_eligible_zip_codes(assumptions)
+    zip_cap_mapping, zip_cap_mapping_df, zip_cap_mapping_status = _build_zip_cap_status_map(assumptions)
+    assumptions["_derived_zip_cap_mapping"] = zip_cap_mapping
+    assumptions["_derived_zip_cap_mapping_df"] = zip_cap_mapping_df
+    assumptions["_derived_zip_cap_mapping_status"] = zip_cap_mapping_status
     cap_eligible_neighborhoods, cap_nbhd_status = _derive_cap_eligible_neighborhood_keys(assumptions)
     assumptions["_derived_cap_eligible_neighborhood_keys"] = cap_eligible_neighborhoods
     assumptions["_derived_cap_eligible_neighborhood_status"] = cap_nbhd_status
@@ -882,6 +999,31 @@ def _score_dataframe(rows: pd.DataFrame, assumptions: dict[str, Any]) -> pd.Data
         return scored_df
     scored_df["cap_eligible_zip_set"] = ",".join(sorted(cap_eligible_zips)) if cap_eligible_zips else pd.NA
     scored_df["cap_data_status"] = cap_status
+    if isinstance(zip_cap_mapping, dict) and zip_cap_mapping:
+        zip_meta_series = scored_df.get("zip_code", pd.Series(dtype="object")).map(
+            lambda z: zip_cap_mapping.get(_normalize_zip(z), {})
+        )
+        scored_df["zip_cap_status"] = zip_meta_series.map(
+            lambda m: m.get("zip_cap_status") if isinstance(m, dict) else pd.NA
+        )
+        scored_df["zip_allowed_for_str"] = zip_meta_series.map(
+            lambda m: m.get("zip_allowed_for_str") if isinstance(m, dict) else pd.NA
+        )
+        scored_df["zip_current_cap_pct_min"] = zip_meta_series.map(
+            lambda m: m.get("current_pct_min") if isinstance(m, dict) else pd.NA
+        )
+        scored_df["zip_current_cap_pct_max"] = zip_meta_series.map(
+            lambda m: m.get("current_pct_max") if isinstance(m, dict) else pd.NA
+        )
+        scored_df["zip_current_cap_pct_avg"] = zip_meta_series.map(
+            lambda m: m.get("current_pct_avg") if isinstance(m, dict) else pd.NA
+        )
+    else:
+        scored_df["zip_cap_status"] = pd.NA
+        scored_df["zip_allowed_for_str"] = pd.NA
+        scored_df["zip_current_cap_pct_min"] = pd.NA
+        scored_df["zip_current_cap_pct_max"] = pd.NA
+        scored_df["zip_current_cap_pct_avg"] = pd.NA
     return scored_df
 
 
@@ -1343,11 +1485,15 @@ def write_scorecard(scored_df: pd.DataFrame, assumptions: dict[str, Any], output
     )
     top_df = fit_df.head(top_n).copy() if not fit_df.empty else fit_df
     assumptions_df = assumptions_to_df(assumptions)
+    zip_mapping_df = assumptions.get("_derived_zip_cap_mapping_df", pd.DataFrame())
+    if not isinstance(zip_mapping_df, pd.DataFrame):
+        zip_mapping_df = pd.DataFrame()
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         top_df.to_excel(writer, index=False, sheet_name="Top_STR_Suitable")
         fit_df.to_excel(writer, index=False, sheet_name="STR_Suitable_Only")
         scored_df.to_excel(writer, index=False, sheet_name="All_Listings")
+        zip_mapping_df.to_excel(writer, index=False, sheet_name="ZIP_Cap_Mapping")
         assumptions_df.to_excel(writer, index=False, sheet_name="Assumptions")
 
 

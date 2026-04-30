@@ -641,7 +641,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       background: radial-gradient(circle at top right, #e0ecff 0%, #f7f8fa 38%);
       color: var(--ink);
     }
-    .wrap { max-width: 1220px; margin: 24px auto 36px; padding: 0 18px; }
+    .wrap { width: min(80vw, 1800px); margin: 24px auto 36px; padding: 0 18px; }
     .headcard {
       background: linear-gradient(120deg, #0f172a 0%, #1f2937 46%, #111827 100%);
       color: #eef2ff;

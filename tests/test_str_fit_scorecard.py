@@ -236,8 +236,10 @@ def test_cap_zip_allowlist_derivation_and_reason(tmp_path: Path):
     zip_fail = scored[scored["property_id"] == "ZIP_FAIL"].iloc[0]
     assert bool(zip_pass["eligible_geo_cap_zip"]) is True
     assert "zip_has_under_cap_neighborhood" in str(zip_pass["geo_cap_zip_reason"])
+    assert str(zip_pass["zip_cap_status"]) == "allowed_any_under_cap"
     assert bool(zip_fail["eligible_geo_cap_zip"]) is False
-    assert "zip_not_in_under_cap_set" in str(zip_fail["geo_cap_zip_reason"])
+    assert str(zip_fail["geo_cap_zip_reason"]) == "disallowed_all_at_or_above_cap"
+    assert str(zip_fail["zip_cap_status"]) == "disallowed_all_at_or_above_cap"
 
 
 def test_shortlist_flags_land_in_target_band(tmp_path: Path):
