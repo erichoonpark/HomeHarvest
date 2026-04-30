@@ -172,27 +172,42 @@ def test_render_dashboard_html_contains_expected_sections():
     assert "Fetched 0 listings, 0 were new." in html
     assert "Priority Candidates" not in html
     assert "Top Priority Score" not in html
-    assert "Best Property Ranking for STR Review" in html
+    assert "Listings Overview" in html
     assert "Rank" in html
     assert "Property ID" in html
     assert "Address" in html
-    assert "Priority Score" in html
+    assert "City" in html
+    assert "ZIP" in html
     assert "List Price" in html
     assert "Price / Sq Ft" in html
-    assert "Lot Size" in html
-    assert "Bedrooms" in html
-    assert "Bathrooms" in html
+    assert "Sq Ft" in html
+    assert "Beds" in html
+    assert "Baths" in html
     assert "Pre-Tax COC" in html
     assert "Post-Tax COC" in html
-    assert "Reason" in html
-    assert "What You Pay" in html
-    assert "Expected Return" in html
-    assert "Ranking Driver" in html
-    assert "AI Property Insight" in html
-    assert "View Listing" in html
+    assert "ADR (Med)" in html
+    assert "Occ (Med)" in html
+    assert "Total Cash To Buy" in html
+    assert "Monthly Debt" in html
+    assert "Scenario Tier" not in html
+    assert "STR Fit Score" in html
+    assert "View Listing" not in html
     assert 'target="_blank"' not in html
     assert "STR Filter Snapshot" in html
-    assert "<table" not in html
+    assert "<table" in html
+    assert "Rows/page" in html
+    assert "page-prev" in html
+    assert "page-next" in html
+    assert "Financing Options" in html
+    assert "Second Home" in html
+    assert "Investment Home" in html
+    assert "HELOC enabled" in html
+    assert "mortgage-second-home" in html
+    assert "mortgage-investment" in html
+    assert "heloc-enabled" in html
+    assert "function mortgagePayment" in html
+    assert "function scenarioForRow" in html
+    assert "computeScenarioRows()" in html
     assert "top5-potential-body" not in html
     assert "pool-watchlist-body" not in html
     assert "home-select" not in html
