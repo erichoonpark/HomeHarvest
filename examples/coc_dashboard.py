@@ -596,7 +596,7 @@ def build_dashboard_payload(
         ),
         "pool_watchlist_note": "Not STR-pass yet; awaiting private-pool verification.",
         "priority_ranking_note": (
-            "Coachella Valley STR-pass listings sorted by pre-tax COC "
+            "Palm Springs/Bermuda Dunes/Indio STR-pass listings sorted by pre-tax COC "
             "(tie-break: post-tax COC, then priority score). "
             "Dashboard view is capped at $1,500,000 list price."
         ),
@@ -607,8 +607,8 @@ def build_dashboard_payload(
             "Beds/Baths minimum: 2+/2+",
             "Private pool required (verified/inferred high-confidence)",
             "Under $1.5M list price",
-            "Preferred cities: Palm Springs, Indio, Bermuda Dunes, Coachella",
-            "Palm Springs must be under the neighborhood cap",
+            "Preferred cities: Palm Springs, Bermuda Dunes, Indio",
+            "ZIP must be in approved under-cap STR neighborhood set",
         ],
     }
 
@@ -936,7 +936,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
   <div class="wrap">
     <section class="headcard">
       <p class="eyebrow">STR Investor Dashboard</p>
-      <h1 class="headline">Coachella Valley STR Review Queue</h1>
+      <h1 class="headline">Palm Springs / Bermuda Dunes / Indio STR Review Queue</h1>
       <p class="subline">High-level shortlist for which property to underwrite next.</p>
     </section>
     <section class="kpis">
@@ -968,7 +968,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
           <h2>Listings Overview</h2>
           <p id="priority-note" class="module-note"></p>
           <div class="snapshot">
-            <strong>STR Filter Snapshot</strong><span class="chip">Coachella Valley</span>
+            <strong>STR Filter Snapshot</strong><span class="chip">Palm Springs • Bermuda Dunes • Indio</span>
             <ul id="filter-snapshot"></ul>
           </div>
         </div>

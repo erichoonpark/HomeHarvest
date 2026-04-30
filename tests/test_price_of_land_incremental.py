@@ -524,6 +524,87 @@ def test_get_property_details_retains_baseline_alias_fields(monkeypatch):
     assert "pool_signal_sources" in out.columns
 
 
+def test_get_property_details_applies_strict_city_scope(monkeypatch):
+    scrape_module = _load_scrape_listings_module()
+
+    fake = pd.DataFrame(
+        [
+            {
+                "property_url": "https://example.com/home/1",
+                "property_id": "in_scope",
+                "style": "SINGLE_FAMILY",
+                "status": "FOR_SALE",
+                "street": "100 Main St",
+                "city": " Palm Springs ",
+                "state": "CA",
+                "zip_code": "92262",
+                "county": "Riverside",
+                "neighborhoods": "Baristo",
+                "latitude": 33.8,
+                "longitude": -116.5,
+                "beds": 3,
+                "full_baths": 2,
+                "half_baths": 0,
+                "sqft": 1800,
+                "year_built": 1990,
+                "days_on_mls": 2,
+                "list_date": "2026-04-23 08:00:00",
+                "last_sold_date": None,
+                "list_price": 550000,
+                "sold_price": None,
+                "price_per_sqft": 100.0,
+                "lot_sqft": 8712,
+                "lot_size_sqft": 8712,
+                "text": "A beautiful single-family listing.",
+                "listing_description": "A beautiful single-family listing.",
+                "hoa_fee": 365,
+                "hoa_monthly_fee": 365,
+                "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes"]}]',
+                "raw_tags": '["swimming_pool"]',
+                "raw_photo_tags": '[{"labels":["swimming_pool"]}]',
+            },
+            {
+                "property_url": "https://example.com/home/2",
+                "property_id": "out_of_scope",
+                "style": "SINGLE_FAMILY",
+                "status": "FOR_SALE",
+                "street": "200 Main St",
+                "city": "Cathedral City",
+                "state": "CA",
+                "zip_code": "92262",
+                "county": "Riverside",
+                "neighborhoods": "Other",
+                "latitude": 33.8,
+                "longitude": -116.5,
+                "beds": 3,
+                "full_baths": 2,
+                "half_baths": 0,
+                "sqft": 1800,
+                "year_built": 1990,
+                "days_on_mls": 2,
+                "list_date": "2026-04-23 08:00:00",
+                "last_sold_date": None,
+                "list_price": 550000,
+                "sold_price": None,
+                "price_per_sqft": 100.0,
+                "lot_sqft": 8712,
+                "lot_size_sqft": 8712,
+                "text": "A beautiful single-family listing.",
+                "listing_description": "A beautiful single-family listing.",
+                "hoa_fee": 365,
+                "hoa_monthly_fee": 365,
+                "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes"]}]',
+                "raw_tags": '["swimming_pool"]',
+                "raw_photo_tags": '[{"labels":["swimming_pool"]}]',
+            },
+        ]
+    )
+
+    monkeypatch.setattr(scrape_module, "scrape_property", lambda **kwargs: fake.copy())
+    out = scrape_module.get_property_details("92262", "for_sale", past_days=30)
+    assert out["property_id"].astype(str).tolist() == ["in_scope"]
+
+
 def test_run_incremental_mode_fails_when_empty_and_allow_empty_is_disabled(tmp_path: Path, monkeypatch):
     scrape_module = _load_scrape_listings_module()
 

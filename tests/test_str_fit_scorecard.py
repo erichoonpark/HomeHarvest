@@ -536,5 +536,6 @@ def test_str_support_fails_closed_when_cap_data_missing_and_strict_neighborhood_
     scored = module.evaluate_str_fit(df, assumptions)
     row = scored.iloc[0]
     assert bool(row["eligible_str_supported"]) is False
+    assert str(row["geo_cap_zip_reason"]) == "cap_data_unavailable_fail_closed"
     assert bool(row["str_fit_pass"]) is False
     assert "Neighborhood is not STR-supported under current cap" in str(row["str_fit_reasons_fail"])

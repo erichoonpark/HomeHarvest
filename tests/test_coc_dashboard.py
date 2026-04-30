@@ -165,7 +165,7 @@ def test_render_dashboard_html_contains_expected_sections():
     payload = module.build_dashboard_payload(_sample_scored_df(), top_n=2, homes_limit=2)
     html = module.render_dashboard_html(payload)
 
-    assert "Coachella Valley STR Review Queue" in html
+    assert "Palm Springs / Bermuda Dunes / Indio STR Review Queue" in html
     assert "Total Listings" in html
     assert "Full scrape: unavailable" in html
     assert "STR Fit Passed" in html

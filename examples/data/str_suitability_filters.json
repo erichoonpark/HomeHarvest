@@ -16,17 +16,8 @@
     "enabled": true,
     "preferred_cities": [
       "Palm Springs",
-      "North Palm Springs",
-      "Cathedral City",
-      "Thousand Palms",
-      "Indio",
       "Bermuda Dunes",
-      "Coachella",
-      "La Quinta",
-      "Palm Desert",
-      "Rancho Mirage",
-      "Desert Hot Springs",
-      "Indian Wells"
+      "Indio"
     ],
     "scope_zip_candidates": ["92258", "92262", "92263", "92264", "92201", "92202", "92203"]
   },
@@ -63,22 +54,13 @@
   },
   "priority_ranking": {
     "enabled": true,
-    "target_city": "Coachella Valley",
+    "target_city": "Palm Springs",
     "target_cities": [
       "Palm Springs",
-      "North Palm Springs",
-      "Cathedral City",
-      "Thousand Palms",
-      "Indio",
       "Bermuda Dunes",
-      "Coachella",
-      "La Quinta",
-      "Palm Desert",
-      "Rancho Mirage",
-      "Desert Hot Springs",
-      "Indian Wells"
+      "Indio"
     ],
-    "region_label": "Coachella Valley",
+    "region_label": "Palm Springs • Bermuda Dunes • Indio",
     "require_for_sale_status": true,
     "require_str_fit_pass": true,
     "factor_weights": {

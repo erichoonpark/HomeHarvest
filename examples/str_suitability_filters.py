@@ -94,7 +94,7 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
     thresholds = raw.get("thresholds", {})
     requirements = raw.get("requirements", {})
     location = raw.get("location", {})
-    preferred_cities_default = ["Palm Springs", "Indio", "Bermuda Dunes"]
+    preferred_cities_default = ["Palm Springs", "Bermuda Dunes", "Indio"]
     preferred_cities = list(location.get("preferred_cities", preferred_cities_default))
     scope_zip_candidates = list(
         location.get("scope_zip_candidates", ["92258", "92262", "92263", "92264", "92201", "92202", "92203"])
@@ -196,7 +196,9 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
     if not normalized_target_cities:
         normalized_target_cities = [c for c in preferred_cities_default]
 
-    region_label_default = "Coachella Valley" if len(normalized_target_cities) > 1 else normalized_target_cities[0]
+    region_label_default = (
+        "Palm Springs • Bermuda Dunes • Indio" if len(normalized_target_cities) > 1 else normalized_target_cities[0]
+    )
     region_label = _safe_str(priority_ranking.get("region_label"), region_label_default).strip() or region_label_default
 
     priority_ranking = {
@@ -512,11 +514,6 @@ def _resolve_private_pool(row: pd.Series, assumptions: dict[str, Any]) -> tuple[
         is_private_pool = _safe_bool(row.get("is_private_pool"))
         is_private_pool_known = _safe_bool(row.get("is_private_pool_known"))
         source = "canonical"
-    elif inferred_private_pool_known:
-        # Fall back to secondary textual/tag/photo inference when canonical fields are missing.
-        is_private_pool = inferred_private_pool
-        is_private_pool_known = inferred_private_pool_known
-        source = inferred_source
     else:
         is_private_pool, is_private_pool_known, source = _infer_pool(row)
     if is_private_pool_known and is_private_pool:
@@ -715,8 +712,8 @@ def _compute_geo_cap_zip(
 
     if not cap_eligible_zips:
         if geography.get("fail_open_if_missing_cap_data", True):
-            return True, f"cap_data_unavailable:{cap_status}:fail_open"
-        return False, f"cap_data_unavailable:{cap_status}:fail_closed"
+            return True, "cap_data_unavailable_fail_open"
+        return False, "cap_data_unavailable_fail_closed"
 
     if zip_code in cap_eligible_zips:
         return True, "zip_has_under_cap_neighborhood"
@@ -858,7 +855,7 @@ def _score_row(
     output["is_palm_springs_priority_candidate"] = False
     output["priority_score"] = pd.NA
     output["priority_rank"] = pd.NA
-    output["priority_reason_summary"] = "Not evaluated for Coachella Valley priority ranking"
+    output["priority_reason_summary"] = "Not evaluated for Palm Springs/Bermuda Dunes/Indio priority ranking"
     return output
 
 
@@ -1175,7 +1172,13 @@ def _apply_palm_springs_priority(df: pd.DataFrame, assumptions: dict[str, Any]) 
         return df
 
     working = df.copy()
-    region_label = _safe_str(priority_cfg.get("region_label"), "Coachella Valley").strip() or "Coachella Valley"
+    region_label = (
+        _safe_str(
+            priority_cfg.get("region_label"),
+            "Palm Springs • Bermuda Dunes • Indio",
+        ).strip()
+        or "Palm Springs • Bermuda Dunes • Indio"
+    )
 
     target_cities_cfg = priority_cfg.get("target_cities", [])
     target_cities: list[str] = []
