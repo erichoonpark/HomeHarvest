@@ -1,9 +1,6 @@
 name: Sync Root index.html for GitHub Pages
 
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 permissions:
