@@ -1,27 +1,27 @@
 {
-  "allow_empty_incremental": true,
-  "batch_run_at": "2026-04-28T09:23:02.104769-07:00",
-  "combined_total_rows": 2483,
+  "allow_empty_incremental": false,
+  "batch_run_at": "2026-04-30T08:22:53.960930-07:00",
+  "combined_total_rows": 2502,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
-    "combined_csv": "/Users/ericpark/projects/HomeHarvest/examples/zips/combined.csv",
-    "combined_xlsx": "/Users/ericpark/projects/HomeHarvest/examples/zips/combined.xlsx"
+    "combined_csv": "/home/runner/work/HomeHarvest/HomeHarvest/examples/zips/combined.csv",
+    "combined_xlsx": "/home/runner/work/HomeHarvest/HomeHarvest/examples/zips/combined.xlsx"
   },
   "status": "success",
   "summary": {
-    "deduped_rows": 4,
-    "existing_overlap_rows": 4,
-    "fetched_rows": 4,
-    "new_rows": 0,
-    "refreshed_same_status_rows": 4,
+    "deduped_rows": 20,
+    "existing_overlap_rows": 1,
+    "fetched_rows": 20,
+    "new_rows": 19,
+    "refreshed_same_status_rows": 1,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 0,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-04-27T23:59:59-07:00",
-  "window_start": "2026-04-25T00:00:00-07:00",
+  "window_end": "2026-04-29T23:59:59-07:00",
+  "window_start": "2026-04-27T00:00:00-07:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
@@ -37,10 +37,10 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 1,
+      "fetched_rows": 5,
       "listing_type_results": [
         {
-          "fetched_rows": 1,
+          "fetched_rows": 5,
           "listing_type": "for_sale"
         }
       ],
@@ -61,10 +61,10 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 1,
+      "fetched_rows": 4,
       "listing_type_results": [
         {
-          "fetched_rows": 1,
+          "fetched_rows": 4,
           "listing_type": "for_sale"
         }
       ],
@@ -73,14 +73,14 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 0,
+      "fetched_rows": 7,
       "listing_type_results": [
         {
-          "fetched_rows": 0,
+          "fetched_rows": 7,
           "listing_type": "for_sale"
         }
       ],
-      "non_empty_listing_types": 0,
+      "non_empty_listing_types": 1,
       "zip_code": "92201"
     },
     {
@@ -97,10 +97,10 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 2,
+      "fetched_rows": 4,
       "listing_type_results": [
         {
-          "fetched_rows": 2,
+          "fetched_rows": 4,
           "listing_type": "for_sale"
         }
       ],
