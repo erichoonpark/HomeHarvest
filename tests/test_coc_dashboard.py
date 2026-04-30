@@ -167,6 +167,7 @@ def test_render_dashboard_html_contains_expected_sections():
 
     assert "Coachella Valley STR Review Queue" in html
     assert "Total Listings" in html
+    assert "Full scrape: unavailable" in html
     assert "STR Fit Passed" in html
     assert "Today's Listing Update" in html
     assert "Fetched 0 listings, 0 were new." in html
@@ -214,6 +215,17 @@ def test_render_dashboard_html_contains_expected_sections():
     assert "Home Breakdown with ADR + Occupancy Sliders" not in html
     assert "Luxury STR Opportunities" not in html
     assert "payload" in html
+
+
+def test_build_dashboard_payload_includes_full_scrape_timestamp():
+    module = _load_module()
+    payload = module.build_dashboard_payload(
+        _sample_scored_df(),
+        top_n=1,
+        homes_limit=2,
+        full_scrape_completed_at="2026-04-30T08:15:00-07:00",
+    )
+    assert payload["full_scrape_completed_at"] == "2026-04-30T08:15:00-07:00"
 
 
 def test_palm_springs_priority_widget_orders_by_pre_tax_coc():

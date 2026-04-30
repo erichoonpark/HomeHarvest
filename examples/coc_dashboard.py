@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -483,6 +484,7 @@ def build_dashboard_payload(
     top_n: int = 10,
     homes_limit: int = 100,
     health_report: dict[str, Any] | None = None,
+    full_scrape_completed_at: str | None = None,
 ) -> dict[str, Any]:
     scored = scored_df.copy()
     if not scored.empty:
@@ -570,6 +572,7 @@ def build_dashboard_payload(
         "new_listings_today": new_listings_today,
         "fetched_rows_today": fetched_rows_today,
         "listings_pulled_at": listings_pulled_at,
+        "full_scrape_completed_at": full_scrape_completed_at,
         "top_properties": top_fit,
         "top_properties_luxury": top_luxury,
         "top_properties_palm_springs_priority": priority_rows,
@@ -600,14 +603,12 @@ def build_dashboard_payload(
         "homes": homes_fit,
         "total_houses_on_sale": int(len(scored)),
         "str_filter_snapshot": [
-            "Quality checks required",
-            "STR-supported neighborhood required",
-            "Private pool required (verified/inferred high-confidence)",
+            "STR-allowed neighborhoods",
             "Beds/Baths minimum: 2+/2+",
-            "STR hard-gate list price range: $100,000 to $3,000,000",
-            "Dashboard review queue cap: <= $1,500,000 list price",
-            "Preferred cities: Palm Springs, North Palm Springs, Cathedral City, Thousand Palms, Indio, Bermuda Dunes, Coachella, La Quinta, Palm Desert, Rancho Mirage, Desert Hot Springs, Indian Wells",
-            "ZIP must be in under-cap STR geography",
+            "Private pool required (verified/inferred high-confidence)",
+            "Under $1.5M list price",
+            "Preferred cities: Palm Springs, Indio, Bermuda Dunes, Coachella",
+            "Palm Springs must be under the neighborhood cap",
         ],
     }
 
@@ -674,6 +675,25 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     .kpi .k { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
     .kpi .v { margin: 6px 0 0; font-size: 32px; font-weight: 800; color: var(--accent); line-height: 1; }
     .kpi .s { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+    .kpi details {
+      margin-top: 8px;
+      border-top: 1px solid #e5eaf2;
+      padding-top: 8px;
+    }
+    .kpi summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      color: #334155;
+      user-select: none;
+    }
+    .kpi details ul {
+      margin: 6px 0 0;
+      padding-left: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
     .module {
       background: var(--card);
       border: 1px solid var(--line);
@@ -924,11 +944,16 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         <p class="k">Total Listings</p>
         <p id="total-ingested" class="v">0</p>
         <p class="s">For-sale records scored</p>
+        <p id="full-scrape-at" class="s">Full scrape: unavailable</p>
       </article>
       <article class="kpi">
         <p class="k">STR Fit Passed</p>
         <p id="total-fit" class="v">0</p>
         <p class="s">Passed suitability filters</p>
+        <details>
+          <summary>STR Filters Applied</summary>
+          <ul id="str-filter-kpi-list"></ul>
+        </details>
       </article>
       <article class="kpi">
         <p class="k">Today's Listing Update</p>
@@ -1062,6 +1087,13 @@ function formatPullTimestamp(rawValue) {
   const parsed = new Date(rawValue);
   if (Number.isNaN(parsed.getTime())) return 'Last run date: unavailable';
   return `Last run date: ${pullTimestampFormatter.format(parsed)}`;
+}
+
+function formatFullScrapeTimestamp(rawValue) {
+  if (!rawValue) return 'Full scrape: unavailable';
+  const parsed = new Date(rawValue);
+  if (Number.isNaN(parsed.getTime())) return 'Full scrape: unavailable';
+  return `Full scrape: ${pullTimestampFormatter.format(parsed)}`;
 }
 
 function formatListingUpdateDetail(fetchedRows, newRows) {
@@ -1250,6 +1282,7 @@ function renderPriorityRanking() {
 
 function init() {
   document.getElementById('total-ingested').textContent = String(payload.total_ingested || 0);
+  document.getElementById('full-scrape-at').textContent = formatFullScrapeTimestamp(payload.full_scrape_completed_at);
   document.getElementById('total-fit').textContent = String(payload.total_str_fit_passed || 0);
   document.getElementById('new-listings-today').textContent = String(payload.new_listings_today || 0);
   document.getElementById('listing-update-detail').textContent = formatListingUpdateDetail(
@@ -1317,11 +1350,16 @@ function init() {
   updateFinancingSummary();
 
   const snapshot = document.getElementById('filter-snapshot');
+  const kpiFilterList = document.getElementById('str-filter-kpi-list');
   snapshot.innerHTML = '';
+  kpiFilterList.innerHTML = '';
   (payload.str_filter_snapshot || []).forEach((line) => {
     const item = document.createElement('li');
     item.textContent = line;
     snapshot.appendChild(item);
+    const kpiItem = document.createElement('li');
+    kpiItem.textContent = line;
+    kpiFilterList.appendChild(kpiItem);
   });
 
   renderPriorityRanking();
@@ -1346,11 +1384,16 @@ def main() -> None:
     args = parse_args()
     scored_df = load_scored_data(args.input)
     health_report = _load_incremental_health_report(args.health_report_input)
+    full_scrape_completed_at: str | None = None
+    input_path = Path(args.input)
+    if input_path.exists():
+        full_scrape_completed_at = datetime.fromtimestamp(input_path.stat().st_mtime).astimezone().isoformat()
     payload = build_dashboard_payload(
         scored_df,
         top_n=args.top_n,
         homes_limit=args.homes_limit,
         health_report=health_report,
+        full_scrape_completed_at=full_scrape_completed_at,
     )
     write_dashboard_html(payload, args.output)
     print(
