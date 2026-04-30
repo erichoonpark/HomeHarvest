@@ -207,6 +207,9 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
     state = _safe_str(row.get("state"))
     zip_code = _safe_str(row.get("zip_code"))
     address = ", ".join([p for p in [street, city, state, zip_code] if p])
+    sqft = _safe_float(row.get("sqft"))
+    list_price = _safe_float(row.get("list_price"))
+    price_per_sqft = (list_price / sqft) if sqft > 0 else 0.0
 
     insights = _ai_insights(row)
 
@@ -216,7 +219,11 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
         "city": city,
         "zip_code": zip_code,
         "property_url": _safe_str(row.get("property_url")),
-        "list_price": _safe_float(row.get("list_price")),
+        "list_price": list_price,
+        "sqft": sqft,
+        "price_per_sqft": price_per_sqft,
+        "beds": _safe_float(row.get("beds")),
+        "full_baths": _safe_float(row.get("full_baths")),
         "scenario_tier": _safe_str(row.get("scenario_tier")),
         "monthly_debt_payment": _safe_float(row.get("monthly_debt_payment")),
         "annual_debt_service": _safe_float(row.get("annual_debt_service")),
@@ -695,90 +702,171 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       margin: 6px 0 0;
       padding-left: 18px;
     }
-    .rank-list {
-      display: grid;
-      gap: 10px;
-      margin-top: 14px;
-    }
-    .rank-row {
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 12px;
-      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-      display: grid;
-      gap: 12px;
-    }
-    .rank-head {
-      display: grid;
-      grid-template-columns: 120px 170px minmax(0, 1fr);
-      gap: 12px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--line);
-    }
-    .rank-body {
-      display: grid;
-      grid-template-columns: 1.2fr 1fr 1.2fr;
-      gap: 12px;
-    }
-    .group {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px;
-      background: #ffffff;
-    }
-    .group-title {
-      margin: 0 0 8px;
-      font-size: 12px;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-      color: #0f172a;
-    }
-    .metric-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px 10px;
-    }
-    .reason-group .label {
+    .overview-header-row {
       margin-top: 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      gap: 14px;
+      align-items: start;
     }
-    .reason-summary {
-      margin: 4px 0 0;
-      color: #334155;
-      font-size: 13px;
-      line-height: 1.4;
-      font-weight: 600;
-    }
-    .ai-line {
-      margin: 4px 0 0;
-      color: #334155;
-      font-size: 12px;
-      line-height: 1.4;
-      font-weight: 500;
-    }
-    .field {
+    .overview-summary {
       min-width: 0;
     }
-    .label {
-      margin: 0;
-      color: var(--label);
+    .finance-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: -3px;
+    }
+    .finance-widget {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      padding: 12px;
+      width: min(420px, 100%);
+    }
+    .finance-widget h3 {
+      margin: 0 0 6px;
+      font-size: 16px;
+    }
+    .finance-sub {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .finance-group {
+      border-top: 1px solid #e2e8f0;
+      padding-top: 10px;
+      margin-top: 10px;
+    }
+    .finance-group:first-of-type {
+      border-top: none;
+      padding-top: 0;
+      margin-top: 0;
+    }
+    .finance-label {
+      margin: 0 0 6px;
+      color: #334155;
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: .05em;
       font-weight: 700;
     }
-    .value {
-      margin: 4px 0 0;
-      color: #0b1220;
-      font-size: 14px;
-      font-weight: 650;
-      line-height: 1.35;
-      word-break: break-word;
+    .finance-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: #0f172a;
     }
-    .value.rank {
-      color: var(--score);
-      font-size: 18px;
-      font-weight: 800;
+    .finance-option strong {
+      display: block;
+      font-size: 12px;
+    }
+    .finance-hint {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .finance-metrics {
+      margin: 8px 0 0;
+      display: grid;
+      gap: 6px;
+    }
+    .finance-metrics p {
+      margin: 0;
+      font-size: 12px;
+      color: #0f172a;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .table-controls {
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .table-controls .left,
+    .table-controls .right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .table-controls select,
+    .table-controls button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: #0f172a;
+      font-size: 12px;
+      padding: 6px 8px;
+    }
+    .table-controls button {
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .table-controls button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+    .table-wrap {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: auto;
+      background: #fff;
+      max-height: 70vh;
+    }
+    table.listings-table {
+      width: 100%;
+      min-width: 1700px;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 12px;
+      line-height: 1.2;
+    }
+    .listings-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #eef2ff;
+      color: #1e293b;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      font-size: 10px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+    }
+    .listings-table tbody td {
+      padding: 7px 10px;
+      border-bottom: 1px solid #eef2f7;
+      color: #0f172a;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+    .listings-table tbody tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+    .listings-table tbody tr:hover td {
+      background: #eff6ff;
+    }
+    .col-address {
+      min-width: 300px;
+      white-space: normal !important;
+    }
+    .num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
     }
     .value.reason {
       font-size: 12px;
@@ -814,15 +902,12 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     }
     @media (max-width: 1100px) {
       .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .rank-head { grid-template-columns: 110px 1fr; }
-      .rank-head .field:last-child { grid-column: span 2; }
-      .rank-body { grid-template-columns: 1fr; }
+      .overview-header-row { grid-template-columns: 1fr; }
+      .finance-toolbar { justify-content: stretch; }
+      .finance-widget { width: 100%; }
     }
     @media (max-width: 700px) {
       .kpis { grid-template-columns: 1fr; }
-      .rank-head { grid-template-columns: 1fr; }
-      .rank-head .field:last-child { grid-column: auto; }
-      .metric-grid { grid-template-columns: 1fr; }
       .headline { font-size: 22px; }
     }
   </style>
@@ -853,13 +938,92 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       </article>
     </section>
     <section class="module">
-      <h2>Best Property Ranking for STR Review</h2>
-      <p id="priority-note" class="module-note"></p>
-      <div class="snapshot">
-        <strong>STR Filter Snapshot</strong><span class="chip">Coachella Valley</span>
-        <ul id="filter-snapshot"></ul>
+      <div class="overview-header-row">
+        <div class="overview-summary">
+          <h2>Listings Overview</h2>
+          <p id="priority-note" class="module-note"></p>
+          <div class="snapshot">
+            <strong>STR Filter Snapshot</strong><span class="chip">Coachella Valley</span>
+            <ul id="filter-snapshot"></ul>
+          </div>
+        </div>
+        <div class="finance-toolbar">
+          <aside class="finance-widget">
+            <h3>Financing Options</h3>
+            <p class="finance-sub">Global scenario applied to all listings in this table.</p>
+            <div class="finance-group">
+              <p class="finance-label">Mortgage Mode</p>
+              <label class="finance-option">
+                <input id="mortgage-second-home" type="radio" name="mortgage-mode" value="second_home" checked />
+                <span><strong>Second Home</strong>5.75% rate, 10% down</span>
+              </label>
+              <label class="finance-option">
+                <input id="mortgage-investment" type="radio" name="mortgage-mode" value="investment_home" />
+                <span><strong>Investment Home</strong>6.25% rate, 25% down</span>
+              </label>
+            </div>
+            <div class="finance-group">
+              <p class="finance-label">Down Payment Source</p>
+              <label class="finance-option">
+                <input id="heloc-enabled" type="checkbox" checked />
+                <span><strong>HELOC enabled</strong>Use SF condo HELOC for down payment (interest-only).</span>
+              </label>
+              <p class="finance-hint">HELOC draw strategy: down payment only. HELOC APR: 8.50%.</p>
+            </div>
+            <div class="finance-group">
+              <p class="finance-label">Active Assumptions</p>
+              <div class="finance-metrics">
+                <p><span>Mortgage Rate</span><strong id="active-rate">5.75%</strong></p>
+                <p><span>Down Payment</span><strong id="active-down">10%</strong></p>
+                <p><span>HELOC</span><strong id="active-heloc">On</strong></p>
+              </div>
+            </div>
+          </aside>
+        </div>
       </div>
-      <div id="ranking-list" class="rank-list"></div>
+      <div class="table-controls">
+        <div class="left">
+          <span id="table-count"></span>
+          <label for="rows-per-page">Rows/page</label>
+          <select id="rows-per-page">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+        <div class="right">
+          <button id="page-prev" type="button">Prev</button>
+          <span id="page-indicator"></span>
+          <button id="page-next" type="button">Next</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="listings-table">
+          <thead>
+            <tr>
+              <th data-sort-key="rank" data-sort-type="number">Rank</th>
+              <th data-sort-key="property_id" data-sort-type="string">Property ID</th>
+              <th data-sort-key="address" data-sort-type="string">Address</th>
+              <th data-sort-key="city" data-sort-type="string">City</th>
+              <th data-sort-key="zip_code" data-sort-type="string">ZIP</th>
+              <th data-sort-key="list_price" data-sort-type="number">List Price</th>
+              <th data-sort-key="sqft" data-sort-type="number">Sq Ft</th>
+              <th data-sort-key="price_per_sqft" data-sort-type="number">Price / Sq Ft</th>
+              <th data-sort-key="beds" data-sort-type="number">Beds</th>
+              <th data-sort-key="full_baths" data-sort-type="number">Baths</th>
+              <th data-sort-key="coc_pre_tax" data-sort-type="number">Pre-Tax COC</th>
+              <th data-sort-key="coc_post_tax" data-sort-type="number">Post-Tax COC</th>
+              <th data-sort-key="annual_cash_flow_med" data-sort-type="number">Annual Cash Flow (Med)</th>
+              <th data-sort-key="adr_med" data-sort-type="number">ADR (Med)</th>
+              <th data-sort-key="occ_med" data-sort-type="number">Occ (Med)</th>
+              <th data-sort-key="total_cash_cost_to_buy" data-sort-type="number">Total Cash To Buy</th>
+              <th data-sort-key="monthly_debt_payment" data-sort-type="number">Monthly Debt</th>
+              <th data-sort-key="str_fit_score" data-sort-type="number">STR Fit Score</th>
+            </tr>
+          </thead>
+          <tbody id="ranking-list"></tbody>
+        </table>
+      </div>
       <div id="priority-empty" class="empty"></div>
     </section>
   </div>
@@ -867,7 +1031,21 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
 const payload = __PAYLOAD_JSON__;
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (v) => `${(Number(v || 0) * 100).toFixed(2)}%`;
-const score100 = (v) => (Number(v || 0) * 100).toFixed(1);
+let currentPage = 1;
+let rowsPerPage = 50;
+let sortedRows = [];
+let activeSortKey = 'coc_post_tax';
+let activeSortDirection = 'desc';
+const financingConfig = {
+  second_home: { rateAnnual: 0.0575, downPct: 0.10, labelRate: '5.75%', labelDown: '10%' },
+  investment_home: { rateAnnual: 0.0625, downPct: 0.25, labelRate: '6.25%', labelDown: '25%' },
+  helocRateAnnual: 0.085,
+  loanTermYears: 30,
+  baselineDownPct: 0.10,
+};
+let activeMortgageMode = 'second_home';
+let helocEnabled = true;
+let scenarioRows = [];
 const pullTimestampFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Los_Angeles',
   year: 'numeric',
@@ -892,68 +1070,182 @@ function formatListingUpdateDetail(fetchedRows, newRows) {
   return `Fetched ${fetched.toLocaleString()} listings, ${netNew.toLocaleString()} were new.`;
 }
 
+function formatInt(value) {
+  return Number(value || 0).toLocaleString();
+}
+
+function mortgagePayment(principal, annualRate, years) {
+  if (principal <= 0) return 0;
+  const monthlyRate = annualRate / 12;
+  const months = years * 12;
+  if (monthlyRate <= 0 || months <= 0) return principal / Math.max(1, months);
+  const factor = Math.pow(1 + monthlyRate, months);
+  return principal * ((monthlyRate * factor) / (factor - 1));
+}
+
+function scenarioForRow(row) {
+  const loan = financingConfig[activeMortgageMode] || financingConfig.second_home;
+  const listPrice = Number(row.list_price || 0);
+  const downPayment = listPrice * loan.downPct;
+  const primaryLoan = Math.max(0, listPrice - downPayment);
+  const monthlyMortgage = mortgagePayment(primaryLoan, loan.rateAnnual, financingConfig.loanTermYears);
+  const helocDraw = helocEnabled ? downPayment : 0;
+  const monthlyHeloc = helocEnabled ? (helocDraw * financingConfig.helocRateAnnual) / 12 : 0;
+  const monthlyDebtPayment = monthlyMortgage + monthlyHeloc;
+
+  const baselineCashToBuy = Number(row.total_cash_cost_to_buy || 0);
+  const baselineDownPayment = listPrice * financingConfig.baselineDownPct;
+  const baselineOtherCash = Math.max(0, baselineCashToBuy - baselineDownPayment);
+  const totalCashToBuy = baselineOtherCash + downPayment - helocDraw;
+
+  const baselineAnnualCashFlow = Number(row.annual_cash_flow_med || 0);
+  const baselineAnnualDebt = Number(row.monthly_debt_payment || 0) * 12;
+  const annualCashBeforeDebt = baselineAnnualCashFlow + baselineAnnualDebt;
+  const annualCashFlowMed = annualCashBeforeDebt - (monthlyDebtPayment * 12);
+
+  const baselineCocPost = Number(row.coc_post_tax || 0);
+  const baselineAnnualPostTax = baselineCocPost * baselineCashToBuy;
+  const postTaxDelta = baselineAnnualPostTax - baselineAnnualCashFlow;
+  const annualCashFlowPostTax = annualCashFlowMed + postTaxDelta;
+
+  const cocPreTax = totalCashToBuy > 0 ? (annualCashFlowMed / totalCashToBuy) : 0;
+  const cocPostTax = totalCashToBuy > 0 ? (annualCashFlowPostTax / totalCashToBuy) : 0;
+
+  return {
+    ...row,
+    monthly_debt_payment: monthlyDebtPayment,
+    total_cash_cost_to_buy: totalCashToBuy,
+    annual_cash_flow_med: annualCashFlowMed,
+    coc_pre_tax: cocPreTax,
+    coc_post_tax: cocPostTax,
+  };
+}
+
+function computeScenarioRows() {
+  scenarioRows = (payload.homes || []).map((row) => scenarioForRow(row));
+}
+
+function getSortValue(row, key, type, rankIndex) {
+  if (key === 'rank') return rankIndex;
+  const raw = row?.[key];
+  if (type === 'number') return Number(raw || 0);
+  return String(raw || '').toLowerCase();
+}
+
+function sortRows(rows) {
+  const typeMap = {
+    rank: 'number',
+    property_id: 'string',
+    address: 'string',
+    city: 'string',
+    zip_code: 'string',
+    list_price: 'number',
+    sqft: 'number',
+    price_per_sqft: 'number',
+    beds: 'number',
+    full_baths: 'number',
+    coc_pre_tax: 'number',
+    coc_post_tax: 'number',
+    annual_cash_flow_med: 'number',
+    adr_med: 'number',
+    occ_med: 'number',
+    total_cash_cost_to_buy: 'number',
+    monthly_debt_payment: 'number',
+    str_fit_score: 'number',
+    property_url: 'string',
+  };
+  const sortType = typeMap[activeSortKey] || 'string';
+  return [...rows].sort((a, b) => {
+    const aValue = getSortValue(a, activeSortKey, sortType, 0);
+    const bValue = getSortValue(b, activeSortKey, sortType, 0);
+    if (aValue < bValue) return activeSortDirection === 'asc' ? -1 : 1;
+    if (aValue > bValue) return activeSortDirection === 'asc' ? 1 : -1;
+    const cocDelta = Number(b.coc_post_tax || 0) - Number(a.coc_post_tax || 0);
+    if (cocDelta !== 0) return cocDelta;
+    const scoreDelta = Number(b.str_fit_score || 0) - Number(a.str_fit_score || 0);
+    if (scoreDelta !== 0) return scoreDelta;
+    return String(a.property_id || '').localeCompare(String(b.property_id || ''));
+  });
+}
+
+function updateFinancingSummary() {
+  const loan = financingConfig[activeMortgageMode] || financingConfig.second_home;
+  document.getElementById('active-rate').textContent = loan.labelRate;
+  document.getElementById('active-down').textContent = loan.labelDown;
+  document.getElementById('active-heloc').textContent = helocEnabled ? 'On' : 'Off';
+}
+
+function renderSortIndicators() {
+  document.querySelectorAll('.listings-table thead th[data-sort-key]').forEach((th) => {
+    const key = th.getAttribute('data-sort-key');
+    const baseLabel = th.textContent.replace(/\\s+[↑↓]$/, '');
+    th.textContent = baseLabel;
+    if (key === activeSortKey) {
+      th.textContent = `${baseLabel} ${activeSortDirection === 'asc' ? '↑' : '↓'}`;
+    }
+  });
+}
+
 function renderPriorityRanking() {
   const container = document.getElementById('ranking-list');
   const empty = document.getElementById('priority-empty');
+  const count = document.getElementById('table-count');
+  const indicator = document.getElementById('page-indicator');
+  const prev = document.getElementById('page-prev');
+  const next = document.getElementById('page-next');
   container.innerHTML = '';
 
-  const rows = payload.top_properties_palm_springs_priority || [];
-  if (!rows.length) {
+  sortedRows = sortRows(scenarioRows);
+
+  if (!sortedRows.length) {
     empty.style.display = 'block';
-    empty.textContent = 'No Coachella Valley priority candidates in the current dataset.';
+    empty.textContent = 'No STR-fit listings in the current dataset.';
+    count.textContent = '0 listings';
+    indicator.textContent = 'Page 0 / 0';
+    prev.disabled = true;
+    next.disabled = true;
     return;
   }
 
   empty.style.display = 'none';
-  rows.forEach((p, idx) => {
-    const rank = String(idx + 1);
-    const listing = p.property_url
-      ? `<a class="link" href="${p.property_url}">View Listing</a>`
-      : '<span style="color:#94a3b8">No link</span>';
-    const reasonSummary = p.priority_reason_summary || 'Balanced STR value profile.';
-    const aiPotential = p.ai_insight_potential || 'Potential: no specific upside note available.';
-    const aiRisk = p.ai_insight_risk || 'Risk: no major risk note available.';
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / rowsPerPage));
+  if (currentPage > totalPages) currentPage = totalPages;
+  const start = (currentPage - 1) * rowsPerPage;
+  const pageRows = sortedRows.slice(start, start + rowsPerPage);
 
-    const row = document.createElement('article');
-    row.className = 'rank-row';
-    row.innerHTML = `
-      <div class="rank-head">
-        <div class="field"><p class="label">Rank</p><p class="value rank">${rank}</p></div>
-        <div class="field"><p class="label">Property ID</p><p class="value">${p.property_id || 'n/a'}</p></div>
-        <div class="field"><p class="label">Address</p><p class="value">${p.address || 'n/a'}<br>${listing}</p></div>
-      </div>
-      <div class="rank-body">
-        <section class="group">
-          <h3 class="group-title">What You Pay</h3>
-          <div class="metric-grid">
-            <div class="field"><p class="label">List Price</p><p class="value">${currency.format(Number(p.list_price || 0))}</p></div>
-            <div class="field"><p class="label">Price / Sq Ft</p><p class="value">${currency.format(Number(p.price_per_sqft || 0))}</p></div>
-            <div class="field"><p class="label">Lot Size</p><p class="value">${Number(p.lot_sqft || 0).toLocaleString()}</p></div>
-            <div class="field"><p class="label">Bedrooms</p><p class="value">${Number(p.beds || 0).toFixed(0)}</p></div>
-            <div class="field"><p class="label">Bathrooms</p><p class="value">${Number(p.full_baths || 0).toFixed(1)}</p></div>
-          </div>
-        </section>
-        <section class="group">
-          <h3 class="group-title">Expected Return</h3>
-          <div class="metric-grid">
-            <div class="field"><p class="label">Priority Score</p><p class="value">${score100(p.priority_score)}</p></div>
-            <div class="field"><p class="label">Pre-Tax COC</p><p class="value">${pct(p.coc_pre_tax)}</p></div>
-            <div class="field"><p class="label">Post-Tax COC</p><p class="value">${pct(p.coc_post_tax)}</p></div>
-            <div class="field"><p class="label">Annual Cash Flow (Med)</p><p class="value">${currency.format(Number(p.annual_cash_flow_med || 0))}</p></div>
-          </div>
-        </section>
-        <section class="group reason-group">
-          <h3 class="group-title">Reason</h3>
-          <p class="label">Ranking Driver</p>
-          <p class="reason-summary">${reasonSummary}</p>
-          <p class="label">AI Property Insight</p>
-          <p class="ai-line">${aiPotential}</p>
-          <p class="ai-line">${aiRisk}</p>
-        </section>
-      </div>
+  pageRows.forEach((p, idx) => {
+    const tr = document.createElement('tr');
+    const rank = start + idx + 1;
+    const addressCell = p.property_url
+      ? `<a class="link" href="${p.property_url}">${p.address || 'n/a'}</a>`
+      : (p.address || 'n/a');
+    tr.innerHTML = `
+      <td class="num">${rank}</td>
+      <td>${p.property_id || 'n/a'}</td>
+      <td class="col-address">${addressCell}</td>
+      <td>${p.city || 'n/a'}</td>
+      <td>${p.zip_code || 'n/a'}</td>
+      <td class="num">${currency.format(Number(p.list_price || 0))}</td>
+      <td class="num">${formatInt(p.sqft)}</td>
+      <td class="num">${currency.format(Number(p.price_per_sqft || 0))}</td>
+      <td class="num">${Number(p.beds || 0).toFixed(0)}</td>
+      <td class="num">${Number(p.full_baths || 0).toFixed(1)}</td>
+      <td class="num">${pct(p.coc_pre_tax)}</td>
+      <td class="num">${pct(p.coc_post_tax)}</td>
+      <td class="num">${currency.format(Number(p.annual_cash_flow_med || 0))}</td>
+      <td class="num">${currency.format(Number(p.adr_med || 0))}</td>
+      <td class="num">${pct(p.occ_med)}</td>
+      <td class="num">${currency.format(Number(p.total_cash_cost_to_buy || 0))}</td>
+      <td class="num">${currency.format(Number(p.monthly_debt_payment || 0))}</td>
+      <td class="num">${Number(p.str_fit_score || 0).toFixed(0)}</td>
     `;
-    container.appendChild(row);
+    container.appendChild(tr);
   });
+
+  count.textContent = `${sortedRows.length.toLocaleString()} listings`;
+  indicator.textContent = `Page ${currentPage} / ${totalPages}`;
+  prev.disabled = currentPage <= 1;
+  next.disabled = currentPage >= totalPages;
 }
 
 function init() {
@@ -965,7 +1257,64 @@ function init() {
     payload.new_listings_today,
   );
   document.getElementById('listings-pulled-at').textContent = formatPullTimestamp(payload.listings_pulled_at);
-  document.getElementById('priority-note').textContent = payload.priority_ranking_note || '';
+  document.getElementById('priority-note').textContent = 'STR-fit listings sorted by post-tax COC (desc), then STR fit score.';
+
+  document.getElementById('mortgage-second-home').addEventListener('change', () => {
+    activeMortgageMode = 'second_home';
+    currentPage = 1;
+    computeScenarioRows();
+    updateFinancingSummary();
+    renderPriorityRanking();
+  });
+  document.getElementById('mortgage-investment').addEventListener('change', () => {
+    activeMortgageMode = 'investment_home';
+    currentPage = 1;
+    computeScenarioRows();
+    updateFinancingSummary();
+    renderPriorityRanking();
+  });
+  document.getElementById('heloc-enabled').addEventListener('change', (event) => {
+    helocEnabled = Boolean(event.target.checked);
+    currentPage = 1;
+    computeScenarioRows();
+    updateFinancingSummary();
+    renderPriorityRanking();
+  });
+
+  document.getElementById('rows-per-page').addEventListener('change', (event) => {
+    rowsPerPage = Number(event.target.value || 50);
+    currentPage = 1;
+    renderPriorityRanking();
+  });
+  document.getElementById('page-prev').addEventListener('click', () => {
+    if (currentPage > 1) {
+      currentPage -= 1;
+      renderPriorityRanking();
+    }
+  });
+  document.getElementById('page-next').addEventListener('click', () => {
+    currentPage += 1;
+    renderPriorityRanking();
+  });
+  document.querySelectorAll('.listings-table thead th[data-sort-key]').forEach((th) => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => {
+      const clickedKey = th.getAttribute('data-sort-key') || '';
+      if (!clickedKey) return;
+      if (activeSortKey === clickedKey) {
+        activeSortDirection = activeSortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        activeSortKey = clickedKey;
+        activeSortDirection = 'asc';
+      }
+      currentPage = 1;
+      renderSortIndicators();
+      renderPriorityRanking();
+    });
+  });
+  renderSortIndicators();
+  computeScenarioRows();
+  updateFinancingSummary();
 
   const snapshot = document.getElementById('filter-snapshot');
   snapshot.innerHTML = '';
