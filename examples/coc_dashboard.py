@@ -11,6 +11,7 @@ import pandas as pd
 DEFAULT_INPUT_PATH = Path("examples/zips/coc_scorecard.xlsx")
 DEFAULT_OUTPUT_PATH = Path("examples/zips/coc_dashboard.html")
 DEFAULT_HEALTH_REPORT_PATH = Path("examples/zips/incremental_health_report.json")
+DEFAULT_ASSUMPTIONS_PATH = Path("examples/data/coc_assumptions.json")
 BUDGET_LUXURY_MAX_PRICE = 1_500_000.0
 BUDGET_LUXURY_TOP_N = 30
 DASHBOARD_MAX_LIST_PRICE = 1_500_000.0
@@ -23,11 +24,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", default=str(DEFAULT_INPUT_PATH), help="Input COC scorecard workbook path")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH), help="Output dashboard HTML path")
     parser.add_argument("--top-n", type=int, default=10, help="Top N rows to display in COC table")
-    parser.add_argument("--homes-limit", type=int, default=100, help="Max homes loaded in interactive breakdown")
+    parser.add_argument(
+        "--homes-limit",
+        type=int,
+        default=0,
+        help="Max homes loaded in interactive breakdown (0 loads all STR-fit passed listings)",
+    )
     parser.add_argument(
         "--health-report-input",
         default=str(DEFAULT_HEALTH_REPORT_PATH),
         help="Optional incremental health report JSON used for KPI metadata.",
+    )
+    parser.add_argument(
+        "--assumptions-input",
+        default=str(DEFAULT_ASSUMPTIONS_PATH),
+        help="COC assumptions JSON used for Palm Springs constraint and tier benchmark metadata.",
     )
     return parser.parse_args()
 
@@ -245,6 +256,8 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
         "annual_cash_flow_low": _safe_float(row.get("annual_cash_flow_low")),
         "annual_cash_flow_med": _safe_float(row.get("annual_cash_flow_med")),
         "annual_cash_flow_high": _safe_float(row.get("annual_cash_flow_high")),
+        "annual_revenue_med": annual_revenue_med,
+        "annual_operating_cost_med": annual_operating_med,
         "str_fit_pass": _safe_bool(row.get("str_fit_pass")),
         "str_fit_score": _safe_float(row.get("str_fit_score")),
         "str_fit_reasons_pass": _safe_str(row.get("str_fit_reasons_pass")),
@@ -478,6 +491,19 @@ def _load_incremental_health_report(path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def _load_coc_assumptions(path: str | Path) -> dict[str, Any]:
+    assumptions_path = Path(path)
+    if not assumptions_path.exists():
+        return {}
+    try:
+        payload = json.loads(assumptions_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
 def build_dashboard_payload(
     scored_df: pd.DataFrame,
     *,
@@ -485,6 +511,7 @@ def build_dashboard_payload(
     homes_limit: int = 100,
     health_report: dict[str, Any] | None = None,
     full_scrape_completed_at: str | None = None,
+    coc_assumptions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scored = scored_df.copy()
     if not scored.empty:
@@ -539,7 +566,8 @@ def build_dashboard_payload(
         .eq("verified_after_enrichment")
         .sum()
     )
-    homes_fit = [_row_to_home_payload(row) for _, row in fit.head(homes_limit).iterrows()]
+    effective_homes_limit = int(homes_limit) if int(homes_limit) > 0 else int(len(fit))
+    homes_fit = [_row_to_home_payload(row) for _, row in fit.head(effective_homes_limit).iterrows()]
     palm_springs_mask = (
         scored.get("city", pd.Series("", index=scored.index)).astype(str).str.strip().str.lower().eq("palm springs")
     )
@@ -559,12 +587,21 @@ def build_dashboard_payload(
 
     if health_report is None:
         health_report = {}
+    if coc_assumptions is None:
+        coc_assumptions = {}
     summary = health_report.get("summary")
     if not isinstance(summary, dict):
         summary = {}
     new_listings_today = int(_safe_float(summary.get("new_rows"), 0.0))
     fetched_rows_today = int(_safe_float(summary.get("fetched_rows"), 0.0))
     listings_pulled_at = _safe_str(health_report.get("batch_run_at")).strip() or None
+    contract_policy = coc_assumptions.get("contract_policy", {}) if isinstance(coc_assumptions, dict) else {}
+    mtr = coc_assumptions.get("mtr", {}) if isinstance(coc_assumptions, dict) else {}
+    scenario_presets = coc_assumptions.get("scenario_presets", {}) if isinstance(coc_assumptions, dict) else {}
+    tier_benchmarks = {
+        "average": scenario_presets.get("palm_springs_normal", {}),
+        "luxury": scenario_presets.get("palm_springs_luxury", {}),
+    }
 
     return {
         "total_ingested": int(len(scored)),
@@ -610,6 +647,16 @@ def build_dashboard_payload(
             "Preferred cities: Palm Springs, Bermuda Dunes, Indio",
             "ZIP must be in approved under-cap STR neighborhood set",
         ],
+        "contract_policy": {
+            "annual_bookable_nights": _safe_float(contract_policy.get("annual_bookable_nights"), 365.0),
+            "max_str_bookings_per_year": _safe_float(contract_policy.get("max_str_bookings_per_year"), 26.0),
+            "avg_stay_nights_per_booking": _safe_float(contract_policy.get("avg_stay_nights_per_booking"), 4.0),
+        },
+        "mtr": {
+            "mtr_adr_multiplier": _safe_float(mtr.get("mtr_adr_multiplier"), 0.55),
+            "mtr_occupancy": _safe_float(mtr.get("mtr_occupancy"), 0.72),
+        },
+        "tier_benchmarks": tier_benchmarks,
     }
 
 
@@ -641,7 +688,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       background: radial-gradient(circle at top right, #e0ecff 0%, #f7f8fa 38%);
       color: var(--ink);
     }
-    .wrap { width: min(80vw, 1800px); margin: 24px auto 36px; padding: 0 18px; }
+    .wrap { width: 100%; margin: 24px 0 36px; padding: 0 18px; }
     .headcard {
       background: linear-gradient(120deg, #0f172a 0%, #1f2937 46%, #111827 100%);
       color: #eef2ff;
@@ -803,6 +850,115 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       justify-content: space-between;
       gap: 8px;
     }
+    .constraint-panel {
+      border: 1px solid #c7d2fe;
+      border-radius: 10px;
+      background: linear-gradient(180deg, #ffffff 0%, #f5f9ff 100%);
+      padding: 10px;
+      margin: 4px 0;
+    }
+    .constraint-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    .constraint-group {
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+    }
+    .constraint-group h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+    .constraint-field { margin: 0 0 8px; }
+    .constraint-field label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 11px;
+      color: #334155;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .constraint-field input, .constraint-field select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+      background: #fff;
+    }
+    .constraint-tier-toggle {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .constraint-tier-toggle button {
+      border: none;
+      background: #fff;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 700;
+      color: #334155;
+    }
+    .constraint-tier-toggle button.active {
+      background: #bfdbfe;
+      color: #1e3a8a;
+    }
+    .constraint-formula {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: #0f172a;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .constraint-badge {
+      display: inline-block;
+      border: 1px solid #cbd5e1;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #334155;
+      background: #f8fafc;
+      margin-right: 5px;
+    }
+    .constraint-delta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .constraint-delta {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 8px;
+      background: #fff;
+    }
+    .constraint-delta p { margin: 0; }
+    .constraint-delta .k { font-size: 11px; color: #64748b; }
+    .constraint-delta .v { margin-top: 4px; font-size: 14px; font-weight: 800; color: #14532d; }
+    .constraint-delta .d { margin-top: 2px; font-size: 11px; color: #0f766e; font-weight: 700; }
+    .constraint-toggle-btn {
+      border: 1px solid #bfdbfe;
+      background: #dbeafe;
+      color: #1e3a8a;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 8px;
+      padding: 5px 8px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .constraint-note {
+      font-size: 11px;
+      color: #64748b;
+    }
     .table-controls {
       margin-top: 14px;
       display: flex;
@@ -819,6 +975,9 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       color: var(--muted);
       font-size: 12px;
       font-weight: 600;
+    }
+    .table-controls .left .filter-label {
+      margin-left: 8px;
     }
     .table-controls select,
     .table-controls button {
@@ -925,6 +1084,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       .overview-header-row { grid-template-columns: 1fr; }
       .finance-toolbar { justify-content: stretch; }
       .finance-widget { width: 100%; }
+      .constraint-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 700px) {
       .kpis { grid-template-columns: 1fr; }
@@ -1009,6 +1169,10 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       <div class="table-controls">
         <div class="left">
           <span id="table-count"></span>
+          <label class="filter-label" for="city-filter">City</label>
+          <select id="city-filter">
+            <option value="all" selected>All</option>
+          </select>
           <label for="rows-per-page">Rows/page</label>
           <select id="rows-per-page">
             <option value="25">25</option>
@@ -1044,6 +1208,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
               <th data-sort-key="total_cash_cost_to_buy" data-sort-type="number">Total Cash To Buy</th>
               <th data-sort-key="monthly_debt_payment" data-sort-type="number">Monthly Debt</th>
               <th data-sort-key="str_fit_score" data-sort-type="number">STR Fit Score</th>
+              <th>Palm Springs Constraints</th>
             </tr>
           </thead>
           <tbody id="ranking-list"></tbody>
@@ -1059,8 +1224,10 @@ const pct = (v) => `${(Number(v || 0) * 100).toFixed(2)}%`;
 let currentPage = 1;
 let rowsPerPage = 50;
 let sortedRows = [];
+let filteredRows = [];
 let activeSortKey = 'coc_post_tax';
 let activeSortDirection = 'desc';
+let activeCityFilter = 'all';
 const financingConfig = {
   second_home: { rateAnnual: 0.0575, downPct: 0.10, labelRate: '5.75%', labelDown: '10%' },
   investment_home: { rateAnnual: 0.0625, downPct: 0.25, labelRate: '6.25%', labelDown: '25%' },
@@ -1071,6 +1238,7 @@ const financingConfig = {
 let activeMortgageMode = 'second_home';
 let helocEnabled = true;
 let scenarioRows = [];
+const rowConstraintState = {};
 const pullTimestampFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Los_Angeles',
   year: 'numeric',
@@ -1104,6 +1272,18 @@ function formatListingUpdateDetail(fetchedRows, newRows) {
 
 function formatInt(value) {
   return Number(value || 0).toLocaleString();
+}
+
+function asPct(value) {
+  return `${(Number(value || 0) * 100).toFixed(2)}%`;
+}
+
+function toTierView(scenarioTier) {
+  return String(scenarioTier || '').toLowerCase() === 'palm_springs_luxury' ? 'luxury' : 'average';
+}
+
+function isPalmSpringsRow(row) {
+  return String(row?.city || '').trim().toLowerCase() === 'palm springs';
 }
 
 function mortgagePayment(principal, annualRate, years) {
@@ -1150,6 +1330,58 @@ function scenarioForRow(row) {
     annual_cash_flow_med: annualCashFlowMed,
     coc_pre_tax: cocPreTax,
     coc_post_tax: cocPostTax,
+  };
+}
+
+function constraintScenarioForRow(row, state) {
+  if (!row) return null;
+  const contractPolicy = payload.contract_policy || {};
+  const mtrPolicy = payload.mtr || {};
+  const annualNights = Number(contractPolicy.annual_bookable_nights || 365);
+  const maxBookings = Number(contractPolicy.max_str_bookings_per_year || 26);
+  const avgStay = Math.max(1, Number(state.avgStay || 0));
+  const strNights = Math.min(annualNights, maxBookings * avgStay);
+  const mtrNights = Math.max(0, annualNights - strNights);
+
+  const strOcc = Number(row.occ_med || 0);
+  const adr = Math.max(0, Number(state.adr || 0));
+  const mtrAdrMultiplier = Number(mtrPolicy.mtr_adr_multiplier || 0.55);
+  const mtrOcc = Number(mtrPolicy.mtr_occupancy || 0.72);
+  const mtrAdr = adr * mtrAdrMultiplier;
+
+  const strRevenue = strNights * adr * strOcc;
+  const mtrRevenue = mtrNights * mtrAdr * mtrOcc;
+  const blendedRevenue = strRevenue + mtrRevenue;
+
+  const baselineRevenue = Number(row.annual_revenue_med || 0);
+  const revenueDelta = blendedRevenue - baselineRevenue;
+  const variableRatio = Number(row.operating_variable_ratio || 0);
+  const operatingDelta = revenueDelta * variableRatio;
+
+  const baselineAnnualCashFlow = Number(row.annual_cash_flow_med || 0);
+  const adjustedAnnualCashFlow = baselineAnnualCashFlow + revenueDelta - operatingDelta;
+
+  const baselineCocPost = Number(row.coc_post_tax || 0);
+  const baselineCashToBuy = Number(row.total_cash_cost_to_buy || 0);
+  const baselineAnnualPostTax = baselineCocPost * baselineCashToBuy;
+  const postTaxDelta = baselineAnnualPostTax - baselineAnnualCashFlow;
+  const adjustedAnnualPostTax = adjustedAnnualCashFlow + postTaxDelta;
+
+  const cocPreTax = baselineCashToBuy > 0 ? adjustedAnnualCashFlow / baselineCashToBuy : 0;
+  const cocPostTax = baselineCashToBuy > 0 ? adjustedAnnualPostTax / baselineCashToBuy : 0;
+
+  return {
+    strNights,
+    mtrNights,
+    strShare: annualNights > 0 ? strNights / annualNights : 0,
+    mtrShare: annualNights > 0 ? mtrNights / annualNights : 0,
+    blendedRevenue,
+    annualCashFlow: adjustedAnnualCashFlow,
+    preTaxCoc: cocPreTax,
+    postTaxCoc: cocPostTax,
+    baselineAnnualCashFlow,
+    baselinePreTaxCoc: Number(row.coc_pre_tax || 0),
+    baselinePostTaxCoc: baselineCocPost,
   };
 }
 
@@ -1200,6 +1432,11 @@ function sortRows(rows) {
   });
 }
 
+function applyCityFilter(rows) {
+  if (activeCityFilter === 'all') return rows;
+  return rows.filter((row) => String(row?.city || '').trim().toLowerCase() === activeCityFilter);
+}
+
 function updateFinancingSummary() {
   const loan = financingConfig[activeMortgageMode] || financingConfig.second_home;
   document.getElementById('active-rate').textContent = loan.labelRate;
@@ -1227,7 +1464,8 @@ function renderPriorityRanking() {
   const next = document.getElementById('page-next');
   container.innerHTML = '';
 
-  sortedRows = sortRows(scenarioRows);
+  filteredRows = applyCityFilter(scenarioRows);
+  sortedRows = sortRows(filteredRows);
 
   if (!sortedRows.length) {
     empty.style.display = 'block';
@@ -1246,11 +1484,16 @@ function renderPriorityRanking() {
   const pageRows = sortedRows.slice(start, start + rowsPerPage);
 
   pageRows.forEach((p, idx) => {
+    const state = getConstraintState(p);
+    const isPs = isPalmSpringsRow(p);
     const tr = document.createElement('tr');
     const rank = start + idx + 1;
     const addressCell = p.property_url
       ? `<a class="link" href="${p.property_url}">${p.address || 'n/a'}</a>`
       : (p.address || 'n/a');
+    const constraintCell = isPs
+      ? `<button type="button" class="constraint-toggle-btn" data-property-id="${p.property_id}" data-action="toggle">${state.open ? 'Hide Constraints' : 'Show Constraints'}</button>`
+      : '<span class="constraint-note"></span>';
     tr.innerHTML = `
       <td class="num">${rank}</td>
       <td>${p.property_id || 'n/a'}</td>
@@ -1270,14 +1513,106 @@ function renderPriorityRanking() {
       <td class="num">${currency.format(Number(p.total_cash_cost_to_buy || 0))}</td>
       <td class="num">${currency.format(Number(p.monthly_debt_payment || 0))}</td>
       <td class="num">${Number(p.str_fit_score || 0).toFixed(0)}</td>
+      <td>${constraintCell}</td>
     `;
     container.appendChild(tr);
+
+    if (isPs && state.open) {
+      const detailTr = document.createElement('tr');
+      detailTr.innerHTML = `<td colspan="19">${renderConstraintDetail(p, state)}</td>`;
+      container.appendChild(detailTr);
+    }
   });
 
   count.textContent = `${sortedRows.length.toLocaleString()} listings`;
   indicator.textContent = `Page ${currentPage} / ${totalPages}`;
   prev.disabled = currentPage <= 1;
   next.disabled = currentPage >= totalPages;
+}
+
+function getConstraintState(row) {
+  const propertyId = String(row.property_id || '');
+  if (!rowConstraintState[propertyId]) {
+    const contractPolicy = payload.contract_policy || {};
+    rowConstraintState[propertyId] = {
+      open: false,
+      tier: toTierView(row.scenario_tier),
+      adr: Number(row.adr_med || 0),
+      avgStay: Number(contractPolicy.avg_stay_nights_per_booking || 4),
+    };
+  }
+  return rowConstraintState[propertyId];
+}
+
+function renderConstraintDetail(row, state) {
+  const scenario = constraintScenarioForRow(row, state);
+  if (!scenario) return '';
+  const contractPolicy = payload.contract_policy || {};
+  const mtrPolicy = payload.mtr || {};
+  const preDelta = scenario.preTaxCoc - scenario.baselinePreTaxCoc;
+  const postDelta = scenario.postTaxCoc - scenario.baselinePostTaxCoc;
+  const cashDelta = scenario.annualCashFlow - scenario.baselineAnnualCashFlow;
+  const propertyId = String(row.property_id || '');
+  return `
+    <div class="constraint-panel">
+      <div class="constraint-grid">
+        <div class="constraint-group">
+          <h4>Palm Springs Constraint Inputs (Listing-Level)</h4>
+          <div class="constraint-field">
+            <label>Tier</label>
+            <div class="constraint-tier-toggle">
+              <button type="button" class="constraint-tier-btn ${state.tier === 'average' ? 'active' : ''}" data-property-id="${propertyId}" data-tier="average">Average</button>
+              <button type="button" class="constraint-tier-btn ${state.tier === 'luxury' ? 'active' : ''}" data-property-id="${propertyId}" data-tier="luxury">Luxury</button>
+            </div>
+          </div>
+          <div class="constraint-field">
+            <label for="constraint-adr-${propertyId}">ADR ($)</label>
+            <input id="constraint-adr-${propertyId}" type="number" min="0" step="5" value="${Math.round(state.adr)}" data-property-id="${propertyId}" data-field="adr" />
+          </div>
+          <div class="constraint-field">
+            <label for="constraint-stay-${propertyId}">Avg Stay (nights)</label>
+            <input id="constraint-stay-${propertyId}" type="number" min="1" max="30" step="0.5" value="${Number(state.avgStay).toFixed(1)}" data-property-id="${propertyId}" data-field="avg_stay" />
+          </div>
+          <p class="finance-hint">Max STR contracts/year: <strong>${Number(contractPolicy.max_str_bookings_per_year || 26)}</strong></p>
+          <p class="finance-hint">MTR ADR multiplier: <strong>${Number(mtrPolicy.mtr_adr_multiplier || 0.55).toFixed(2)}x</strong></p>
+          <p class="finance-hint">MTR occupancy: <strong>${asPct(Number(mtrPolicy.mtr_occupancy || 0.72))}</strong></p>
+        </div>
+        <div class="constraint-group">
+          <h4>Constraint Math</h4>
+          <p class="constraint-formula"><span>STR nights = min(365, 26 × avg_stay)</span><strong>${Math.round(scenario.strNights)} nights</strong></p>
+          <p class="constraint-formula"><span>MTR nights = 365 - STR nights</span><strong>${Math.round(scenario.mtrNights)} nights</strong></p>
+          <p class="constraint-formula"><span>STR/MTR split</span><strong>${asPct(scenario.strShare)} / ${asPct(scenario.mtrShare)}</strong></p>
+          <p class="constraint-formula"><span>Blended revenue</span><strong>${currency.format(scenario.blendedRevenue)}</strong></p>
+          <p>
+            <span class="constraint-badge">26-cap</span>
+            <span class="constraint-badge">STR ${Math.round(scenario.strNights)}n</span>
+            <span class="constraint-badge">MTR ${Math.round(scenario.mtrNights)}n</span>
+            <span class="constraint-badge">${(scenario.strShare * 100).toFixed(0)}/${(scenario.mtrShare * 100).toFixed(0)} split</span>
+          </p>
+        </div>
+      </div>
+      <div class="constraint-group" style="margin-top: 12px;">
+        <h4>Impact vs Baseline</h4>
+        <div class="constraint-delta-grid">
+          <article class="constraint-delta">
+            <p class="k">Pre-Tax CoC</p>
+            <p class="v">${pct(scenario.preTaxCoc)}</p>
+            <p class="d">${preDelta >= 0 ? '+' : ''}${(preDelta * 100).toFixed(2)} pts</p>
+          </article>
+          <article class="constraint-delta">
+            <p class="k">Post-Tax CoC</p>
+            <p class="v">${pct(scenario.postTaxCoc)}</p>
+            <p class="d">${postDelta >= 0 ? '+' : ''}${(postDelta * 100).toFixed(2)} pts</p>
+          </article>
+          <article class="constraint-delta">
+            <p class="k">Annual Cash Flow</p>
+            <p class="v">${currency.format(scenario.annualCashFlow)}</p>
+            <p class="d">${cashDelta >= 0 ? '+' : '-'}${currency.format(Math.abs(cashDelta))}</p>
+          </article>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function init() {
@@ -1319,6 +1654,11 @@ function init() {
     currentPage = 1;
     renderPriorityRanking();
   });
+  document.getElementById('city-filter').addEventListener('change', (event) => {
+    activeCityFilter = String(event.target.value || 'all');
+    currentPage = 1;
+    renderPriorityRanking();
+  });
   document.getElementById('page-prev').addEventListener('click', () => {
     if (currentPage > 1) {
       currentPage -= 1;
@@ -1345,8 +1685,64 @@ function init() {
       renderPriorityRanking();
     });
   });
+  document.getElementById('ranking-list').addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const propertyId = String(target.dataset.propertyId || '');
+    if (!propertyId) return;
+    if (target.dataset.action === 'toggle') {
+      const row = scenarioRows.find((item) => String(item.property_id || '') === propertyId);
+      if (!row || !isPalmSpringsRow(row)) return;
+      const state = getConstraintState(row);
+      state.open = !state.open;
+      renderPriorityRanking();
+      return;
+    }
+    if (target.classList.contains('constraint-tier-btn')) {
+      const row = scenarioRows.find((item) => String(item.property_id || '') === propertyId);
+      if (!row) return;
+      const state = getConstraintState(row);
+      const tier = String(target.dataset.tier || 'average');
+      state.tier = tier === 'luxury' ? 'luxury' : 'average';
+      renderPriorityRanking();
+    }
+  });
+  document.getElementById('ranking-list').addEventListener('input', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof HTMLInputElement)) return;
+    const propertyId = String(target.dataset.propertyId || '');
+    if (!propertyId) return;
+    const row = scenarioRows.find((item) => String(item.property_id || '') === propertyId);
+    if (!row) return;
+    const state = getConstraintState(row);
+    if (target.dataset.field === 'adr') {
+      state.adr = Math.max(0, Number(target.value || 0));
+      renderPriorityRanking();
+      return;
+    }
+    if (target.dataset.field === 'avg_stay') {
+      state.avgStay = Math.max(1, Number(target.value || 1));
+      renderPriorityRanking();
+    }
+  });
   renderSortIndicators();
   computeScenarioRows();
+  const cityFilter = document.getElementById('city-filter');
+  const uniqueCities = Array.from(
+    new Set(
+      scenarioRows
+        .map((row) => String(row.city || '').trim())
+        .filter((city) => city.length > 0)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+  uniqueCities.forEach((city) => {
+    const option = document.createElement('option');
+    option.value = city.toLowerCase();
+    option.textContent = city;
+    cityFilter.appendChild(option);
+  });
+
   updateFinancingSummary();
 
   const snapshot = document.getElementById('filter-snapshot');
@@ -1384,6 +1780,7 @@ def main() -> None:
     args = parse_args()
     scored_df = load_scored_data(args.input)
     health_report = _load_incremental_health_report(args.health_report_input)
+    coc_assumptions = _load_coc_assumptions(args.assumptions_input)
     full_scrape_completed_at: str | None = None
     input_path = Path(args.input)
     if input_path.exists():
@@ -1394,6 +1791,7 @@ def main() -> None:
         homes_limit=args.homes_limit,
         health_report=health_report,
         full_scrape_completed_at=full_scrape_completed_at,
+        coc_assumptions=coc_assumptions,
     )
     write_dashboard_html(payload, args.output)
     print(
