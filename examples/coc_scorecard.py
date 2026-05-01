@@ -12,6 +12,7 @@ import pandas as pd
 DEFAULT_INPUT_PATH = Path("examples/zips/str_suitability_filter.xlsx")
 DEFAULT_OUTPUT_PATH = Path("examples/zips/coc_scorecard.xlsx")
 DEFAULT_ASSUMPTIONS_PATH = Path("examples/data/coc_assumptions.json")
+DEFAULT_OVERRIDES_PATH = Path("examples/data/property_overrides.json")
 MIN_VALID_HOME_PRICE = 100000
 ADDRESS_EXCLUDE_KEYWORDS = (
     "mobile",
@@ -38,10 +39,12 @@ UNIT_ADDRESS_TOKENS = ("unit", "apt", "apartment", "suite", "ste", "#", "lot", "
 # cannot be detected reliably from listing metadata.
 MANUAL_EXCLUDED_PROPERTY_IDS = {
     "1086968872",  # 470 E Avenida Olancha, Palm Springs, CA 92264
+    "2002934800",  # 3467 Savanna Way, Palm Springs, CA 92262 (55+ community)
 }
 MANUAL_EXCLUDED_ADDRESSES = {
     ("470 e avenida olancha", "palm springs", "ca", "92264"),
     ("594 w stevens rd", "palm springs", "ca", "92262"),
+    ("3467 savanna way", "palm springs", "ca", "92262"),
 }
 
 
@@ -129,6 +132,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Score all for-sale rows, ignoring str_fit_pass gate (audit mode).",
     )
+    parser.add_argument(
+        "--overrides",
+        default=str(DEFAULT_OVERRIDES_PATH),
+        help="Property-level manual override JSON path (tier/ADR/occupancy).",
+    )
     return parser.parse_args()
 
 
@@ -175,6 +183,53 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
     normalized["tax"].setdefault("cost_seg_bonus_pct", 0.20)
 
     normalized.setdefault("ranking_metric", "coc_post_tax")
+    normalized.setdefault("luxury_classifier", {})
+    normalized["luxury_classifier"].setdefault(
+        "weights",
+        {
+            "list_price": 0.35,
+            "beds": 0.20,
+            "sqft": 0.20,
+            "pool": 0.15,
+            "neighborhood_support": 0.10,
+        },
+    )
+    normalized["luxury_classifier"].setdefault("threshold", 0.58)
+    normalized["luxury_classifier"].setdefault("min_price_consideration", 1_000_000)
+    normalized["luxury_classifier"].setdefault("signals_required", 2)
+    normalized.setdefault("adr_occ_model", {})
+    normalized["adr_occ_model"].setdefault(
+        "tier_base_adr",
+        {"palm_springs_normal": 430.0, "palm_springs_luxury": 950.0, "fallback": 330.0},
+    )
+    normalized["adr_occ_model"].setdefault(
+        "bedroom_adr_multipliers", {"1": 0.72, "2": 0.88, "3": 1.00, "4": 1.20, "5+": 1.45}
+    )
+    normalized["adr_occ_model"].setdefault(
+        "tier_base_occupancy",
+        {"palm_springs_normal": 0.58, "palm_springs_luxury": 0.50, "fallback": 0.56},
+    )
+    normalized["adr_occ_model"].setdefault("occupancy_bedroom_adjustment", {"1": -0.02, "2": 0.01, "3": 0.0, "4": -0.02, "5+": -0.04})
+    normalized["adr_occ_model"].setdefault(
+        "feature_multipliers",
+        {
+            "pool_adr": 1.12,
+            "renovated_adr": 1.08,
+            "luxury_adr_uplift": 1.18,
+            "strong_neighborhood_adr": 1.04,
+            "pool_occ_add": 0.02,
+            "renovated_occ_add": 0.01,
+            "strong_neighborhood_occ_add": 0.02,
+        },
+    )
+    normalized["adr_occ_model"].setdefault("occupancy_floor", 0.35)
+    normalized["adr_occ_model"].setdefault("occupancy_ceiling", 0.78)
+    normalized.setdefault("override_policy", {})
+    normalized["override_policy"].setdefault("precedence", "manual_over_auto")
+    normalized["override_policy"].setdefault("allow_expired", False)
+    normalized["override_policy"].setdefault("max_adr", 5000.0)
+    normalized["override_policy"].setdefault("min_occupancy", 0.20)
+    normalized["override_policy"].setdefault("max_occupancy", 0.95)
     return normalized
 
 
@@ -214,6 +269,12 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
         return float(value) > 0
     except (TypeError, ValueError):
         return default
+
+
+def _safe_str(value: Any, default: str = "") -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return default
+    return str(value)
 
 
 def _contains_excluded_address_keyword(street: Any) -> bool:
@@ -332,6 +393,119 @@ def mortgage_payment(principal: float, annual_rate: float, term_years: int) -> f
     return principal * (monthly_rate * factor) / (factor - 1)
 
 
+def _bedroom_bucket(beds: Any) -> str:
+    beds_value = int(_safe_float(beds, 0))
+    if beds_value >= 5:
+        return "5+"
+    if beds_value <= 1:
+        return "1"
+    return str(beds_value)
+
+
+def _is_strong_neighborhood_support(row: pd.Series) -> bool:
+    return _safe_bool(row.get("eligible_geo_cap_zip")) or _safe_bool(row.get("is_palm_springs_priority_candidate"))
+
+
+def _normalize_override_tier(value: Any) -> str | None:
+    raw = str(value or "").strip().lower()
+    if raw in {"luxury", "palm_springs_luxury"}:
+        return "palm_springs_luxury"
+    if raw in {"normal", "average", "palm_springs_normal"}:
+        return "palm_springs_normal"
+    if raw in {"fallback"}:
+        return "fallback"
+    return None
+
+
+def load_property_overrides(path: str | Path, assumptions: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    policy = assumptions.get("override_policy", {})
+    allow_expired = _safe_bool(policy.get("allow_expired"), False)
+    max_adr = _safe_float(policy.get("max_adr"), 5000.0)
+    min_occ = _safe_float(policy.get("min_occupancy"), 0.20)
+    max_occ = _safe_float(policy.get("max_occupancy"), 0.95)
+    payload_path = Path(path)
+    if not payload_path.exists():
+        return {}
+    try:
+        raw = json.loads(payload_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    entries = raw.get("entries", []) if isinstance(raw, dict) else []
+    if not isinstance(entries, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    now = pd.Timestamp.now(tz="UTC")
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        pid = str(entry.get("property_id", "") or "").strip()
+        if not pid:
+            continue
+        expires_at = str(entry.get("expires_at", "") or "").strip()
+        if expires_at and not allow_expired:
+            expires_ts = pd.to_datetime(expires_at, errors="coerce", utc=True)
+            if pd.notna(expires_ts) and expires_ts < now:
+                continue
+        tier = _normalize_override_tier(entry.get("tier"))
+        adr = _safe_float(entry.get("adr"), -1.0)
+        occ = _safe_float(entry.get("occupancy"), -1.0)
+        if adr <= 0 or adr > max_adr:
+            adr = -1.0
+        if occ < min_occ or occ > max_occ:
+            occ = -1.0
+        if tier is None and adr <= 0 and occ < 0:
+            continue
+        out[pid] = {
+            "tier": tier,
+            "adr": adr if adr > 0 else None,
+            "occupancy": occ if occ >= 0 else None,
+            "updated_at": str(entry.get("updated_at", "") or ""),
+            "note": str(entry.get("note", "") or ""),
+        }
+    return out
+
+
+def classify_luxury_tier(row: pd.Series, assumptions: dict[str, Any]) -> str:
+    city = str(row.get("city", "")).strip().lower()
+    if city != "palm springs":
+        return "fallback"
+    cfg = assumptions.get("luxury_classifier", {})
+    weights = cfg.get("weights", {})
+    threshold = _safe_float(cfg.get("threshold"), 0.58)
+    min_price = _safe_float(cfg.get("min_price_consideration"), 1_000_000)
+    min_signals = int(_safe_float(cfg.get("signals_required"), 2))
+    price = _safe_float(row.get("list_price"), 0.0)
+    beds = _safe_float(row.get("beds"), 0.0)
+    sqft = _safe_float(row.get("sqft"), 0.0)
+    pool_present = _safe_bool(row.get("has_pool_inferred")) or _safe_bool(row.get("is_private_pool"))
+    strong_neighborhood = _is_strong_neighborhood_support(row)
+    signals = 0
+    score = 0.0
+    w_price = _safe_float(weights.get("list_price"), 0.35)
+    w_beds = _safe_float(weights.get("beds"), 0.20)
+    w_sqft = _safe_float(weights.get("sqft"), 0.20)
+    w_pool = _safe_float(weights.get("pool"), 0.15)
+    w_nei = _safe_float(weights.get("neighborhood_support"), 0.10)
+    if price >= min_price:
+        signals += 1
+        score += w_price * min(1.0, max(0.0, (price - min_price) / 1_500_000))
+    if beds >= 4:
+        signals += 1
+        score += w_beds * min(1.0, beds / 6.0)
+    if sqft >= 2400:
+        signals += 1
+        score += w_sqft * min(1.0, sqft / 4200.0)
+    if pool_present:
+        signals += 1
+        score += w_pool
+    if strong_neighborhood:
+        signals += 1
+        score += w_nei
+    if signals >= min_signals and score >= threshold:
+        return "palm_springs_luxury"
+    return "palm_springs_normal"
+
+
 def choose_scenario_tier(row: pd.Series, luxury_threshold: float) -> str:
     city = str(row.get("city", "")).strip().lower()
     price = _safe_float(row.get("list_price"), 0.0)
@@ -343,7 +517,7 @@ def choose_scenario_tier(row: pd.Series, luxury_threshold: float) -> str:
 def _scenario_for(row: pd.Series, scenario_name: str, assumptions: dict[str, Any]) -> ScenarioAssumptions:
     routing = assumptions["scenario_routing"]
     tiers = assumptions["scenario_presets"]
-    tier_name = choose_scenario_tier(row, _safe_float(routing["luxury_price_threshold"], 2_000_000.0))
+    tier_name = classify_luxury_tier(row, assumptions)
     tier_values = tiers[tier_name][scenario_name]
     return ScenarioAssumptions(
         adr=_safe_float(tier_values["adr"]), occupancy_rate=_safe_float(tier_values["occupancy_rate"])
@@ -479,6 +653,7 @@ def _score_row(
     heloc: HELOCAssumptions,
     tax: TaxAssumptions,
     assumptions: dict[str, Any],
+    overrides_by_property_id: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     price = _safe_float(row.get("list_price"), 0.0)
     if price <= 0:
@@ -499,8 +674,9 @@ def _score_row(
     hoa_annual = _safe_float(row.get("hoa_fee"), 0.0) * 12
     annual_fixed_ops = insurance_annual + property_tax_annual + (cost_model.utilities_monthly * 12) + hoa_annual
 
+    property_id = str(row.get("property_id", "") or "").strip()
     base = {
-        "property_id": row.get("property_id"),
+        "property_id": property_id,
         "property_url": row.get("property_url"),
         "status": row.get("status"),
         "street": row.get("street"),
@@ -522,9 +698,7 @@ def _score_row(
         "initial_reserve": initial_reserve,
         "total_cash_cost_to_buy": total_cash_cost_to_buy,
         "annual_fixed_operating_costs": annual_fixed_ops,
-        "scenario_tier": choose_scenario_tier(
-            row, _safe_float(assumptions["scenario_routing"]["luxury_price_threshold"])
-        ),
+        "scenario_tier": classify_luxury_tier(row, assumptions),
         "str_fit_pass": row.get("str_fit_pass"),
         "str_fit_score": row.get("str_fit_score"),
         "str_fit_reasons_pass": row.get("str_fit_reasons_pass"),
@@ -569,11 +743,60 @@ def _score_row(
     is_luxury = scenario_tier == "palm_springs_luxury"
 
     pool_present = _safe_bool(row.get("has_pool_inferred")) or _safe_bool(row.get("is_private_pool"))
-    pool_mult = adr_engine.pool_multiplier if pool_present else 1.0
-    renov_mult = adr_engine.renovation_multiplier if _is_renovated(row) else 1.0
-    bed_mult = _bedroom_multiplier(row.get("beds"), adr_engine.bedroom_multipliers)
-    luxury_mult = 1.0 + adr_engine.luxury_uplift_pct if is_luxury else 1.0
-    adr_assumed = adr_engine.base_adr_market * pool_mult * renov_mult * bed_mult * luxury_mult
+    renovated = _is_renovated(row)
+    strong_neighborhood = _is_strong_neighborhood_support(row)
+    adr_occ = assumptions.get("adr_occ_model", {})
+    feature_mult = adr_occ.get("feature_multipliers", {})
+    tier_base_adr = adr_occ.get("tier_base_adr", {})
+    tier_base_occ = adr_occ.get("tier_base_occupancy", {})
+    bedroom_adr_mult = adr_occ.get("bedroom_adr_multipliers", {})
+    bedroom_occ_adj = adr_occ.get("occupancy_bedroom_adjustment", {})
+    bed_bucket = _bedroom_bucket(row.get("beds"))
+
+    adr_base = _safe_float(tier_base_adr.get(scenario_tier), adr_engine.base_adr_market)
+    adr_auto = adr_base
+    adr_auto *= _safe_float(bedroom_adr_mult.get(bed_bucket), 1.0)
+    if pool_present:
+        adr_auto *= _safe_float(feature_mult.get("pool_adr"), adr_engine.pool_multiplier)
+    if renovated:
+        adr_auto *= _safe_float(feature_mult.get("renovated_adr"), adr_engine.renovation_multiplier)
+    if is_luxury:
+        adr_auto *= _safe_float(feature_mult.get("luxury_adr_uplift"), 1.0 + adr_engine.luxury_uplift_pct)
+    if strong_neighborhood:
+        adr_auto *= _safe_float(feature_mult.get("strong_neighborhood_adr"), 1.04)
+
+    occ_auto = _safe_float(tier_base_occ.get(scenario_tier), 0.58)
+    occ_auto += _safe_float(bedroom_occ_adj.get(bed_bucket), 0.0)
+    if pool_present:
+        occ_auto += _safe_float(feature_mult.get("pool_occ_add"), 0.02)
+    if renovated:
+        occ_auto += _safe_float(feature_mult.get("renovated_occ_add"), 0.01)
+    if strong_neighborhood:
+        occ_auto += _safe_float(feature_mult.get("strong_neighborhood_occ_add"), 0.02)
+    occ_auto = min(
+        _safe_float(adr_occ.get("occupancy_ceiling"), 0.78),
+        max(_safe_float(adr_occ.get("occupancy_floor"), 0.35), occ_auto),
+    )
+
+    override = overrides_by_property_id.get(property_id, {})
+    tier_override = _normalize_override_tier(override.get("tier"))
+    adr_override = override.get("adr")
+    occ_override = override.get("occupancy")
+    scenario_tier_final = tier_override or scenario_tier
+    adr_final = _safe_float(adr_override, adr_auto) if adr_override is not None else adr_auto
+    occ_final = _safe_float(occ_override, occ_auto) if occ_override is not None else occ_auto
+    base["scenario_tier"] = scenario_tier_final
+    base["tier_auto"] = scenario_tier
+    base["tier_final"] = scenario_tier_final
+    base["tier_source"] = "manual" if tier_override else "auto"
+    base["adr_auto"] = adr_auto
+    base["adr_final"] = adr_final
+    base["adr_source"] = "manual" if adr_override is not None else "auto"
+    base["occupancy_auto"] = occ_auto
+    base["occupancy_final"] = occ_final
+    base["occupancy_source"] = "manual" if occ_override is not None else "auto"
+    base["override_last_updated_at"] = _safe_str(override.get("updated_at"))
+    base["override_note"] = _safe_str(override.get("note"))
 
     max_str_nights = contract_policy.max_str_bookings_per_year * contract_policy.avg_stay_nights_per_booking
     if not is_palm_springs:
@@ -581,13 +804,18 @@ def _score_row(
 
     for scenario_name in ("low", "med", "high"):
         scenario = _scenario_for(row, scenario_name, assumptions)
-        demand_nights = contract_policy.annual_bookable_nights * scenario.occupancy_rate
+        scenario_occ = occ_final
+        if scenario_name == "low":
+            scenario_occ = max(_safe_float(adr_occ.get("occupancy_floor"), 0.35), occ_final - 0.08)
+        elif scenario_name == "high":
+            scenario_occ = min(_safe_float(adr_occ.get("occupancy_ceiling"), 0.78), occ_final + 0.08)
+        demand_nights = contract_policy.annual_bookable_nights * scenario_occ
         str_nights_capped = min(demand_nights, max_str_nights)
         remaining_nights = max(0.0, contract_policy.annual_bookable_nights - str_nights_capped)
         mtr_nights = remaining_nights * mtr.mtr_occupancy
 
-        str_revenue = str_nights_capped * adr_assumed
-        mtr_adr = adr_assumed * mtr.mtr_adr_multiplier
+        str_revenue = str_nights_capped * adr_final
+        mtr_adr = adr_final * mtr.mtr_adr_multiplier
         mtr_revenue = mtr_nights * mtr_adr
         annual_revenue = str_revenue + mtr_revenue
 
@@ -634,9 +862,9 @@ def _score_row(
         coc = annual_cash_flow / total_cash_cost_to_buy if total_cash_cost_to_buy > 0 else 0.0
         coc_post_tax = annual_cash_flow_post_tax / total_cash_cost_to_buy if total_cash_cost_to_buy > 0 else 0.0
 
-        base["adr_assumed"] = adr_assumed
-        base[f"adr_{scenario_name}"] = adr_assumed
-        base[f"occupancy_{scenario_name}"] = scenario.occupancy_rate
+        base["adr_assumed"] = adr_final
+        base[f"adr_{scenario_name}"] = adr_final
+        base[f"occupancy_{scenario_name}"] = scenario_occ
         base[f"str_nights_capped_{scenario_name}"] = str_nights_capped
         base[f"mtr_nights_{scenario_name}"] = mtr_nights
         base[f"str_revenue_capped_{scenario_name}"] = str_revenue
@@ -671,7 +899,13 @@ def _score_row(
     return base
 
 
-def score_properties(df: pd.DataFrame, assumptions: dict[str, Any], *, require_str_fit: bool = True) -> pd.DataFrame:
+def score_properties(
+    df: pd.DataFrame,
+    assumptions: dict[str, Any],
+    *,
+    require_str_fit: bool = True,
+    overrides_by_property_id: dict[str, dict[str, Any]] | None = None,
+) -> pd.DataFrame:
     assumptions = _normalize_assumptions(assumptions)
     financing = _build_financing(assumptions)
     cost_model = _build_cost_model(assumptions)
@@ -703,8 +937,9 @@ def score_properties(df: pd.DataFrame, assumptions: dict[str, Any], *, require_s
             eligible = eligible.sort_values(by=sort_cols, ascending=True, kind="mergesort")
         eligible = eligible.drop_duplicates(subset=["property_id"], keep="last").copy()
 
+    overrides = overrides_by_property_id or {}
     scored_rows = [
-        _score_row(row, financing, cost_model, adr_engine, contract_policy, mtr, heloc, tax, assumptions)
+        _score_row(row, financing, cost_model, adr_engine, contract_policy, mtr, heloc, tax, assumptions, overrides)
         for _, row in eligible.iterrows()
     ]
     scored_rows = [row for row in scored_rows if row]
@@ -781,6 +1016,34 @@ def assumptions_to_df(assumptions: dict[str, Any]) -> pd.DataFrame:
     rows.append(
         {"section": "ranking", "key": "ranking_metric", "value": assumptions.get("ranking_metric", "coc_post_tax")}
     )
+    rows.append(
+        {
+            "section": "luxury_classifier",
+            "key": "threshold",
+            "value": _safe_float(assumptions.get("luxury_classifier", {}).get("threshold"), 0.58),
+        }
+    )
+    rows.append(
+        {
+            "section": "luxury_classifier",
+            "key": "weights",
+            "value": json.dumps(assumptions.get("luxury_classifier", {}).get("weights", {})),
+        }
+    )
+    rows.append(
+        {
+            "section": "adr_occ_model",
+            "key": "tier_base_adr",
+            "value": json.dumps(assumptions.get("adr_occ_model", {}).get("tier_base_adr", {})),
+        }
+    )
+    rows.append(
+        {
+            "section": "adr_occ_model",
+            "key": "tier_base_occupancy",
+            "value": json.dumps(assumptions.get("adr_occ_model", {}).get("tier_base_occupancy", {})),
+        }
+    )
 
     for tier_name, tier_data in assumptions["scenario_presets"].items():
         for scenario_name, metrics in tier_data.items():
@@ -816,9 +1079,12 @@ def write_scorecard(scored_df: pd.DataFrame, assumptions: dict[str, Any], output
 def main() -> None:
     args = parse_args()
     assumptions = load_assumptions(args.assumptions)
+    overrides = load_property_overrides(args.overrides, assumptions)
 
     df = load_input_rows(args.input)
-    scored_df = score_properties(df, assumptions, require_str_fit=not args.run_all)
+    scored_df = score_properties(
+        df, assumptions, require_str_fit=not args.run_all, overrides_by_property_id=overrides
+    )
     write_scorecard(scored_df, assumptions, args.output, args.top_n)
 
     print(

@@ -119,7 +119,23 @@ def _sample_scored_df() -> pd.DataFrame:
 
 def test_build_dashboard_payload_has_widgets_data():
     module = _load_module()
-    payload = module.build_dashboard_payload(_sample_scored_df(), top_n=1, homes_limit=2)
+    payload = module.build_dashboard_payload(
+        _sample_scored_df(),
+        top_n=1,
+        homes_limit=2,
+        coc_assumptions={
+            "contract_policy": {
+                "annual_bookable_nights": 365,
+                "max_str_bookings_per_year": 26,
+                "avg_stay_nights_per_booking": 4,
+            },
+            "mtr": {"mtr_adr_multiplier": 0.55, "mtr_occupancy": 0.72},
+            "scenario_presets": {
+                "palm_springs_normal": {"med": {"adr": 430, "occupancy_rate": 0.62}},
+                "palm_springs_luxury": {"med": {"adr": 1250, "occupancy_rate": 0.58}},
+            },
+        },
+    )
 
     assert payload["total_ingested"] == 2
     assert payload["total_str_fit_passed"] == 1
@@ -145,10 +161,6 @@ def test_build_dashboard_payload_has_widgets_data():
     assert "ai_insight_potential" in payload["homes"][0]
     assert "ai_insight_risk" in payload["homes"][0]
     assert "top_properties_luxury" in payload
-    assert "table_rows" in payload
-    assert len(payload["table_rows"]) == 1
-    assert "coc_assumptions_summary" in payload
-    assert "pre_tax_formula" in payload["coc_assumptions_summary"]
     assert "top_properties_palm_springs_priority" in payload
     assert "total_palm_springs_priority_candidates" in payload
     assert "total_palm_springs_strict_pass" in payload
@@ -162,6 +174,10 @@ def test_build_dashboard_payload_has_widgets_data():
     assert "total_luxury_value_budget_candidates" in payload
     assert "luxury_value_budget_cap" in payload
     assert "luxury_value_note" in payload
+    assert payload["contract_policy"]["max_str_bookings_per_year"] == 26
+    assert payload["mtr"]["mtr_adr_multiplier"] == 0.55
+    assert "average" in payload["tier_benchmarks"]
+    assert "luxury" in payload["tier_benchmarks"]
 
 
 def test_render_dashboard_html_contains_expected_sections():
@@ -169,51 +185,70 @@ def test_render_dashboard_html_contains_expected_sections():
     payload = module.build_dashboard_payload(_sample_scored_df(), top_n=2, homes_limit=2)
     html = module.render_dashboard_html(payload)
 
-    assert "Coachella Valley STR Review Queue" in html
+    assert "Palm Springs / Bermuda Dunes / Indio STR Review Queue" in html
     assert "Total Listings" in html
+    assert "Full scrape: unavailable" in html
     assert "STR Fit Passed" in html
     assert "Today's Listing Update" in html
     assert "Fetched 0 listings, 0 were new." in html
     assert "Priority Candidates" not in html
     assert "Top Priority Score" not in html
-    assert "Best Property Ranking for STR Review" in html
+    assert "Listings Overview" in html
     assert "Rank" in html
     assert "Property ID" in html
     assert "Address" in html
-    assert "Priority Score" in html
+    assert "City" in html
+    assert "ZIP" in html
     assert "List Price" in html
     assert "Price / Sq Ft" in html
-    assert "Lot Size" in html
-    assert "Bedrooms" in html
-    assert "Bathrooms" in html
+    assert "Sq Ft" in html
+    assert "Beds" in html
+    assert "Baths" in html
     assert "Pre-Tax COC" in html
     assert "Post-Tax COC" in html
-    assert "Reason" in html
-    assert "What You Pay" in html
-    assert "Expected Return" in html
-    assert "Ranking Driver" in html
-    assert "AI Property Insight" in html
-    assert "View Listing" in html
-    assert "STR-Pass Listings Table View" in html
-    assert "COC Assumptions and Formula Summary" in html
-    assert "filter-city" in html
-    assert "rows-per-page" in html
-    assert "sort-field" in html
-    assert 'id="listings-table"' in html
-    assert 'id="table-body"' in html
-    assert "Page 1 of 1" in html
-    assert "Pre-tax COC = annual_cash_flow_pre_tax / total_cash_cost_to_buy" in html
-    assert "Post-tax COC = annual_cash_flow_post_tax / total_cash_cost_to_buy" in html
-    assert "Underwriting estimate only. Not tax, legal, or investment advice." in html
+    assert "ADR (Med)" in html
+    assert "Occ (Med)" in html
+    assert "Total Cash To Buy" in html
+    assert "Monthly Debt" in html
+    assert "Scenario Tier" not in html
+    assert "STR Fit Score" in html
+    assert "View Listing" not in html
     assert 'target="_blank"' not in html
     assert "STR Filter Snapshot" in html
     assert "<table" in html
+    assert "Rows/page" in html
+    assert "page-prev" in html
+    assert "page-next" in html
+    assert "Financing Options" in html
+    assert "Second Home" in html
+    assert "Investment Home" in html
+    assert "HELOC enabled" in html
+    assert "mortgage-second-home" in html
+    assert "mortgage-investment" in html
+    assert "heloc-enabled" in html
+    assert "function mortgagePayment" in html
+    assert "function scenarioForRow" in html
+    assert "computeScenarioRows()" in html
     assert "top5-potential-body" not in html
     assert "pool-watchlist-body" not in html
-    assert "home-select" not in html
+    assert "Palm Springs Constraints" in html
+    assert "Show Constraints" in html
+    assert "constraintScenarioForRow" in html
+    assert "Listing-Level" in html
     assert "Home Breakdown with ADR + Occupancy Sliders" not in html
     assert "Luxury STR Opportunities" not in html
     assert "payload" in html
+
+
+def test_build_dashboard_payload_includes_full_scrape_timestamp():
+    module = _load_module()
+    payload = module.build_dashboard_payload(
+        _sample_scored_df(),
+        top_n=1,
+        homes_limit=2,
+        full_scrape_completed_at="2026-04-30T08:15:00-07:00",
+    )
+    assert payload["full_scrape_completed_at"] == "2026-04-30T08:15:00-07:00"
 
 
 def test_palm_springs_priority_widget_orders_by_pre_tax_coc():
@@ -390,9 +425,6 @@ def test_render_dashboard_html_wires_new_kpi_dom_ids():
     assert "payload.new_listings_today" in html
     assert "payload.fetched_rows_today" in html
     assert "payload.listings_pulled_at" in html
-    assert "renderTable" in html
-    assert "bindTableControls" in html
-    assert "renderAssumptionsPanel" in html
 
 
 def test_top_properties_are_str_fit_only_and_deterministic_tiebreak():
@@ -714,3 +746,28 @@ def test_excluded_coownership_listing_is_hard_removed():
     assert "2310318356" not in top_ids
     assert "2310318356" not in priority_ids
     assert top_ids == ["SAFE1"]
+
+
+def test_dashboard_payload_exposes_override_provenance():
+    module = _load_module()
+    df = _sample_scored_df().copy()
+    df.loc[0, "tier_auto"] = "palm_springs_normal"
+    df.loc[0, "tier_final"] = "palm_springs_luxury"
+    df.loc[0, "tier_source"] = "manual"
+    df.loc[0, "adr_auto"] = 420
+    df.loc[0, "adr_final"] = 1600
+    df.loc[0, "adr_source"] = "manual"
+    df.loc[0, "occupancy_auto"] = 0.58
+    df.loc[0, "occupancy_final"] = 0.64
+    df.loc[0, "occupancy_source"] = "manual"
+    df.loc[0, "override_note"] = "manual uplift"
+
+    payload = module.build_dashboard_payload(df, top_n=2, homes_limit=2)
+    home = payload["homes"][0]
+    assert home["tier_source"] in {"auto", "manual"}
+    assert home["adr_source"] in {"auto", "manual"}
+    assert home["occupancy_source"] in {"auto", "manual"}
+    assert "adr_final" in home
+    assert "occupancy_final" in home
+    html = module.render_dashboard_html(payload)
+    assert "MANUAL" in html or "AUTO" in html

@@ -625,3 +625,90 @@ def test_year_two_costseg_increases_depreciation():
     row2 = module.score_properties(df, assumptions_year2).iloc[0]
     assert float(row1["depreciation_costseg_annual"]) == 0.0
     assert float(row2["depreciation_costseg_annual"]) > 0.0
+
+
+def test_auto_tier_and_provenance_columns_present():
+    module = _load_module()
+    assumptions = _assumptions()
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "AUTO_LUX",
+                "status": "FOR_SALE",
+                "street": "500 Vista Lux",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 2100000,
+                "beds": 5,
+                "full_baths": 4,
+                "sqft": 4100,
+                "has_pool_inferred": True,
+                "eligible_geo_cap_zip": True,
+                "str_fit_pass": True,
+            }
+        ]
+    )
+    scored = module.score_properties(df, assumptions)
+    row = scored.iloc[0]
+    assert row["tier_auto"] in {"palm_springs_normal", "palm_springs_luxury", "fallback"}
+    assert row["tier_final"] in {"palm_springs_normal", "palm_springs_luxury", "fallback"}
+    assert row["tier_source"] in {"auto", "manual"}
+    assert float(row["adr_auto"]) > 0
+    assert float(row["adr_final"]) > 0
+    assert row["adr_source"] in {"auto", "manual"}
+    assert float(row["occupancy_auto"]) > 0
+    assert float(row["occupancy_final"]) > 0
+    assert row["occupancy_source"] in {"auto", "manual"}
+
+
+def test_manual_overrides_take_precedence(tmp_path: Path):
+    module = _load_module()
+    assumptions = _assumptions()
+    overrides_path = tmp_path / "property_overrides.json"
+    overrides_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "entries": [
+                    {
+                        "property_id": "OVR1",
+                        "tier": "luxury",
+                        "adr": 1777,
+                        "occupancy": 0.66,
+                        "updated_at": "2026-04-30T12:00:00Z",
+                        "note": "manual analyst override",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    overrides = module.load_property_overrides(overrides_path, assumptions)
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "OVR1",
+                "status": "FOR_SALE",
+                "street": "700 Override Ave",
+                "city": "Palm Springs",
+                "state": "CA",
+                "zip_code": "92262",
+                "list_price": 1300000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1900,
+                "has_pool_inferred": False,
+                "str_fit_pass": True,
+            }
+        ]
+    )
+    scored = module.score_properties(df, assumptions, overrides_by_property_id=overrides)
+    row = scored.iloc[0]
+    assert row["tier_final"] == "palm_springs_luxury"
+    assert row["tier_source"] == "manual"
+    assert float(row["adr_final"]) == 1777.0
+    assert row["adr_source"] == "manual"
+    assert float(row["occupancy_final"]) == 0.66
+    assert row["occupancy_source"] == "manual"
+    assert "manual analyst override" in str(row["override_note"])

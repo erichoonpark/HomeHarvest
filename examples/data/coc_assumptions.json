@@ -34,6 +34,62 @@
     },
     "luxury_uplift_pct": 0.35
   },
+  "luxury_classifier": {
+    "weights": {
+      "list_price": 0.35,
+      "beds": 0.2,
+      "sqft": 0.2,
+      "pool": 0.15,
+      "neighborhood_support": 0.1
+    },
+    "threshold": 0.58,
+    "min_price_consideration": 1000000,
+    "signals_required": 2
+  },
+  "adr_occ_model": {
+    "tier_base_adr": {
+      "palm_springs_normal": 430,
+      "palm_springs_luxury": 950,
+      "fallback": 330
+    },
+    "bedroom_adr_multipliers": {
+      "1": 0.72,
+      "2": 0.88,
+      "3": 1.0,
+      "4": 1.2,
+      "5+": 1.45
+    },
+    "tier_base_occupancy": {
+      "palm_springs_normal": 0.58,
+      "palm_springs_luxury": 0.5,
+      "fallback": 0.56
+    },
+    "occupancy_bedroom_adjustment": {
+      "1": -0.02,
+      "2": 0.01,
+      "3": 0.0,
+      "4": -0.02,
+      "5+": -0.04
+    },
+    "feature_multipliers": {
+      "pool_adr": 1.12,
+      "renovated_adr": 1.08,
+      "luxury_adr_uplift": 1.18,
+      "strong_neighborhood_adr": 1.04,
+      "pool_occ_add": 0.02,
+      "renovated_occ_add": 0.01,
+      "strong_neighborhood_occ_add": 0.02
+    },
+    "occupancy_floor": 0.35,
+    "occupancy_ceiling": 0.78
+  },
+  "override_policy": {
+    "precedence": "manual_over_auto",
+    "allow_expired": false,
+    "max_adr": 5000,
+    "min_occupancy": 0.2,
+    "max_occupancy": 0.95
+  },
   "contract_policy": {
     "annual_bookable_nights": 365,
     "max_str_bookings_per_year": 26,

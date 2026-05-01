@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 from pathlib import Path
 from typing import Any
@@ -10,12 +11,15 @@ import pandas as pd
 DEFAULT_INPUT_PATH = Path("examples/zips/coc_scorecard.xlsx")
 DEFAULT_OUTPUT_PATH = Path("examples/zips/coc_dashboard.html")
 DEFAULT_HEALTH_REPORT_PATH = Path("examples/zips/incremental_health_report.json")
-DEFAULT_COC_ASSUMPTIONS_PATH = Path("examples/data/coc_assumptions.json")
+DEFAULT_ASSUMPTIONS_PATH = Path("examples/data/coc_assumptions.json")
 BUDGET_LUXURY_MAX_PRICE = 1_500_000.0
 BUDGET_LUXURY_TOP_N = 30
 DASHBOARD_MAX_LIST_PRICE = 1_500_000.0
-EXCLUDED_PROPERTY_IDS = {"2310318356"}
-EXCLUDED_PROPERTY_SIGNATURES = {("1961 s palm canyon dr", "palm springs", "ca", "92264")}
+EXCLUDED_PROPERTY_IDS = {"2310318356", "2002934800"}
+EXCLUDED_PROPERTY_SIGNATURES = {
+    ("1961 s palm canyon dr", "palm springs", "ca", "92264"),
+    ("3467 savanna way", "palm springs", "ca", "92262"),
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,11 +27,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", default=str(DEFAULT_INPUT_PATH), help="Input COC scorecard workbook path")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT_PATH), help="Output dashboard HTML path")
     parser.add_argument("--top-n", type=int, default=10, help="Top N rows to display in COC table")
-    parser.add_argument("--homes-limit", type=int, default=100, help="Max homes loaded in interactive breakdown")
+    parser.add_argument(
+        "--homes-limit",
+        type=int,
+        default=0,
+        help="Max homes loaded in interactive breakdown (0 loads all STR-fit passed listings)",
+    )
     parser.add_argument(
         "--health-report-input",
         default=str(DEFAULT_HEALTH_REPORT_PATH),
         help="Optional incremental health report JSON used for KPI metadata.",
+    )
+    parser.add_argument(
+        "--assumptions-input",
+        default=str(DEFAULT_ASSUMPTIONS_PATH),
+        help="COC assumptions JSON used for Palm Springs constraint and tier benchmark metadata.",
     )
     return parser.parse_args()
 
@@ -98,7 +112,10 @@ def _is_excluded_listing(row: pd.Series) -> bool:
         return True
 
     full_address = _normalize_text(row.get("address"))
-    return full_address == "1961 s palm canyon dr palm springs ca 92264"
+    return full_address in {
+        "1961 s palm canyon dr palm springs ca 92264",
+        "3467 savanna way palm springs ca 92262",
+    }
 
 
 def _ai_insights(row: pd.Series) -> dict[str, str]:
@@ -208,6 +225,9 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
     state = _safe_str(row.get("state"))
     zip_code = _safe_str(row.get("zip_code"))
     address = ", ".join([p for p in [street, city, state, zip_code] if p])
+    sqft = _safe_float(row.get("sqft"))
+    list_price = _safe_float(row.get("list_price"))
+    price_per_sqft = (list_price / sqft) if sqft > 0 else 0.0
 
     insights = _ai_insights(row)
 
@@ -217,8 +237,15 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
         "city": city,
         "zip_code": zip_code,
         "property_url": _safe_str(row.get("property_url")),
-        "list_price": _safe_float(row.get("list_price")),
+        "list_price": list_price,
+        "sqft": sqft,
+        "price_per_sqft": price_per_sqft,
+        "beds": _safe_float(row.get("beds")),
+        "full_baths": _safe_float(row.get("full_baths")),
         "scenario_tier": _safe_str(row.get("scenario_tier")),
+        "tier_auto": _safe_str(row.get("tier_auto")),
+        "tier_final": _safe_str(row.get("tier_final")),
+        "tier_source": _safe_str(row.get("tier_source"), "auto"),
         "monthly_debt_payment": _safe_float(row.get("monthly_debt_payment")),
         "annual_debt_service": _safe_float(row.get("annual_debt_service")),
         "total_cash_cost_to_buy": _safe_float(row.get("total_cash_cost_to_buy")),
@@ -227,9 +254,17 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
         "adr_low": _safe_float(row.get("adr_low")),
         "adr_med": _safe_float(row.get("adr_med")),
         "adr_high": _safe_float(row.get("adr_high")),
+        "adr_auto": _safe_float(row.get("adr_auto")),
+        "adr_final": _safe_float(row.get("adr_final"), _safe_float(row.get("adr_med"))),
+        "adr_source": _safe_str(row.get("adr_source"), "auto"),
         "occ_low": _safe_float(row.get("occupancy_low")),
         "occ_med": _safe_float(row.get("occupancy_med")),
         "occ_high": _safe_float(row.get("occupancy_high")),
+        "occupancy_auto": _safe_float(row.get("occupancy_auto")),
+        "occupancy_final": _safe_float(row.get("occupancy_final"), _safe_float(row.get("occupancy_med"))),
+        "occupancy_source": _safe_str(row.get("occupancy_source"), "auto"),
+        "override_last_updated_at": _safe_str(row.get("override_last_updated_at")),
+        "override_note": _safe_str(row.get("override_note")),
         "coc_low": _safe_float(row.get("coc_low")),
         "coc_med": _safe_float(row.get("coc_med")),
         "coc_high": _safe_float(row.get("coc_high")),
@@ -238,6 +273,8 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
         "annual_cash_flow_low": _safe_float(row.get("annual_cash_flow_low")),
         "annual_cash_flow_med": _safe_float(row.get("annual_cash_flow_med")),
         "annual_cash_flow_high": _safe_float(row.get("annual_cash_flow_high")),
+        "annual_revenue_med": annual_revenue_med,
+        "annual_operating_cost_med": annual_operating_med,
         "str_fit_pass": _safe_bool(row.get("str_fit_pass")),
         "str_fit_score": _safe_float(row.get("str_fit_score")),
         "str_fit_reasons_pass": _safe_str(row.get("str_fit_reasons_pass")),
@@ -276,6 +313,15 @@ def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
                 "beds": _safe_float(row.get("beds")),
                 "full_baths": _safe_float(row.get("full_baths")),
                 "adr_med": _safe_float(row.get("adr_med")),
+                "adr_auto": _safe_float(row.get("adr_auto")),
+                "adr_final": _safe_float(row.get("adr_final"), _safe_float(row.get("adr_med"))),
+                "adr_source": _safe_str(row.get("adr_source"), "auto"),
+                "occupancy_auto": _safe_float(row.get("occupancy_auto")),
+                "occupancy_final": _safe_float(row.get("occupancy_final"), _safe_float(row.get("occupancy_med"))),
+                "occupancy_source": _safe_str(row.get("occupancy_source"), "auto"),
+                "tier_auto": _safe_str(row.get("tier_auto")),
+                "tier_final": _safe_str(row.get("tier_final"), _safe_str(row.get("scenario_tier"))),
+                "tier_source": _safe_str(row.get("tier_source"), "auto"),
                 "coc_med": _safe_float(row.get("coc_med")),
                 "coc_pre_tax": _safe_float(row.get("coc_pre_tax"), _safe_float(row.get("coc_med"))),
                 "coc_post_tax": _safe_float(row.get("coc_post_tax"), _safe_float(row.get("coc_med"))),
@@ -291,98 +337,6 @@ def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
             }
         )
     return top_rows
-
-
-def _table_rows(df: pd.DataFrame, max_rows: int = 500) -> list[dict[str, Any]]:
-    if df.empty:
-        return []
-    rows: list[dict[str, Any]] = []
-    for _, row in df.head(max_rows).iterrows():
-        rows.append(
-            {
-                "property_id": _safe_str(row.get("property_id")),
-                "address": ", ".join(
-                    [
-                        p
-                        for p in [
-                            _safe_str(row.get("street")),
-                            _safe_str(row.get("city")),
-                            _safe_str(row.get("state")),
-                            _safe_str(row.get("zip_code")),
-                        ]
-                        if p
-                    ]
-                ),
-                "city": _safe_str(row.get("city")),
-                "neighborhood": _safe_str(
-                    row.get("neighborhood")
-                    or row.get("str_organized_neighborhood")
-                    or row.get("str_neighborhood")
-                    or row.get("neighborhoods")
-                ),
-                "list_price": _safe_float(row.get("list_price")),
-                "beds": _safe_float(row.get("beds")),
-                "full_baths": _safe_float(row.get("full_baths")),
-                "sqft": _safe_float(row.get("sqft")),
-                "lot_sqft": _safe_float(row.get("lot_sqft")),
-                "price_per_sqft": (
-                    _safe_float(row.get("list_price")) / _safe_float(row.get("sqft"))
-                    if _safe_float(row.get("sqft")) > 0
-                    else 0.0
-                ),
-                "coc_pre_tax": _safe_float(row.get("coc_pre_tax"), _safe_float(row.get("coc_med"))),
-                "coc_post_tax": _safe_float(row.get("coc_post_tax"), _safe_float(row.get("coc_med"))),
-                "annual_cash_flow_med": _safe_float(row.get("annual_cash_flow_med")),
-                "str_fit_score": _safe_float(row.get("str_fit_score")),
-                "property_url": _safe_str(row.get("property_url")),
-            }
-        )
-    return rows
-
-
-def _load_coc_assumptions_summary(path: str | Path = DEFAULT_COC_ASSUMPTIONS_PATH) -> dict[str, Any]:
-    assumptions_path = Path(path)
-    if not assumptions_path.exists():
-        return {}
-    try:
-        payload = json.loads(assumptions_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-
-    financing = payload.get("financing", {}) if isinstance(payload.get("financing"), dict) else {}
-    cost_model = payload.get("cost_model", {}) if isinstance(payload.get("cost_model"), dict) else {}
-    tax = payload.get("tax", {}) if isinstance(payload.get("tax"), dict) else {}
-    return {
-        "pre_tax_formula": "Pre-tax COC = annual_cash_flow_pre_tax / total_cash_cost_to_buy",
-        "post_tax_formula": "Post-tax COC = annual_cash_flow_post_tax / total_cash_cost_to_buy",
-        "note": (
-            "Post-tax cash flow adjusts pre-tax cash flow by tax impact, which is derived from taxable income "
-            "after deductible expenses (including interest and depreciation)."
-        ),
-        "caveat": "Underwriting estimate only. Not tax, legal, or investment advice.",
-        "tax": {
-            "effective_combined_tax_rate": _safe_float(tax.get("effective_combined_tax_rate"), 0.37),
-            "analysis_year": int(_safe_float(tax.get("analysis_year"), 1)),
-            "building_allocation_pct": _safe_float(tax.get("building_allocation_pct"), 0.80),
-            "standard_recovery_years": _safe_float(tax.get("standard_recovery_years"), 27.5),
-            "cost_seg_start_year": int(_safe_float(tax.get("cost_seg_start_year"), 2)),
-            "cost_seg_bonus_pct": _safe_float(tax.get("cost_seg_bonus_pct"), 0.20),
-        },
-        "financing": {
-            "down_payment_pct": _safe_float(financing.get("down_payment_pct"), 0.10),
-            "interest_rate_annual": _safe_float(financing.get("interest_rate_annual"), 0.0575),
-            "loan_term_years": int(_safe_float(financing.get("loan_term_years"), 30)),
-        },
-        "cost_model": {
-            "management_fee_pct": _safe_float(cost_model.get("management_fee_pct"), 0.18),
-            "capex_pct": _safe_float(cost_model.get("capex_pct"), 0.05),
-            "maintenance_pct": _safe_float(cost_model.get("maintenance_pct"), 0.06),
-            "vacancy_buffer_pct": _safe_float(cost_model.get("vacancy_buffer_pct"), 0.04),
-            "turnover_buffer_pct": _safe_float(cost_model.get("turnover_buffer_pct"), 0.03),
-        },
-    }
 
 
 def _normalized_map(series: pd.Series, *, inverse: bool = False) -> dict[int, float]:
@@ -563,12 +517,27 @@ def _load_incremental_health_report(path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def _load_coc_assumptions(path: str | Path) -> dict[str, Any]:
+    assumptions_path = Path(path)
+    if not assumptions_path.exists():
+        return {}
+    try:
+        payload = json.loads(assumptions_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
 def build_dashboard_payload(
     scored_df: pd.DataFrame,
     *,
     top_n: int = 10,
     homes_limit: int = 100,
     health_report: dict[str, Any] | None = None,
+    full_scrape_completed_at: str | None = None,
+    coc_assumptions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scored = scored_df.copy()
     if not scored.empty:
@@ -609,10 +578,8 @@ def build_dashboard_payload(
 
     top_fit = _top_rows(fit, top_n)
     top_luxury = _top_rows(luxury, top_n)
-    table_rows = _table_rows(fit, max_rows=500)
     priority_rows = _palm_springs_priority_rows(scored, top_n)
     watchlist_rows = _pool_watchlist_rows(scored, top_n=30)
-    coc_assumptions_summary = _load_coc_assumptions_summary()
     total_pool_unknown_candidates = int(
         (
             scored.get("pool_enrichment_needed", pd.Series(False, index=scored.index)).fillna(False).astype(bool)
@@ -625,7 +592,8 @@ def build_dashboard_payload(
         .eq("verified_after_enrichment")
         .sum()
     )
-    homes_fit = [_row_to_home_payload(row) for _, row in fit.head(homes_limit).iterrows()]
+    effective_homes_limit = int(homes_limit) if int(homes_limit) > 0 else int(len(fit))
+    homes_fit = [_row_to_home_payload(row) for _, row in fit.head(effective_homes_limit).iterrows()]
     palm_springs_mask = (
         scored.get("city", pd.Series("", index=scored.index)).astype(str).str.strip().str.lower().eq("palm springs")
     )
@@ -645,12 +613,21 @@ def build_dashboard_payload(
 
     if health_report is None:
         health_report = {}
+    if coc_assumptions is None:
+        coc_assumptions = {}
     summary = health_report.get("summary")
     if not isinstance(summary, dict):
         summary = {}
     new_listings_today = int(_safe_float(summary.get("new_rows"), 0.0))
     fetched_rows_today = int(_safe_float(summary.get("fetched_rows"), 0.0))
     listings_pulled_at = _safe_str(health_report.get("batch_run_at")).strip() or None
+    contract_policy = coc_assumptions.get("contract_policy", {}) if isinstance(coc_assumptions, dict) else {}
+    mtr = coc_assumptions.get("mtr", {}) if isinstance(coc_assumptions, dict) else {}
+    scenario_presets = coc_assumptions.get("scenario_presets", {}) if isinstance(coc_assumptions, dict) else {}
+    tier_benchmarks = {
+        "average": scenario_presets.get("palm_springs_normal", {}),
+        "luxury": scenario_presets.get("palm_springs_luxury", {}),
+    }
 
     return {
         "total_ingested": int(len(scored)),
@@ -658,9 +635,9 @@ def build_dashboard_payload(
         "new_listings_today": new_listings_today,
         "fetched_rows_today": fetched_rows_today,
         "listings_pulled_at": listings_pulled_at,
+        "full_scrape_completed_at": full_scrape_completed_at,
         "top_properties": top_fit,
         "top_properties_luxury": top_luxury,
-        "table_rows": table_rows,
         "top_properties_palm_springs_priority": priority_rows,
         "top_properties_luxury_value_budget": budget_value_rows,
         "pool_verification_watchlist": watchlist_rows,
@@ -682,22 +659,30 @@ def build_dashboard_payload(
         ),
         "pool_watchlist_note": "Not STR-pass yet; awaiting private-pool verification.",
         "priority_ranking_note": (
-            "Coachella Valley STR-pass listings sorted by pre-tax COC "
+            "Palm Springs/Bermuda Dunes/Indio STR-pass listings sorted by pre-tax COC "
             "(tie-break: post-tax COC, then priority score). "
             "Dashboard view is capped at $1,500,000 list price."
         ),
-        "coc_assumptions_summary": coc_assumptions_summary,
         "homes": homes_fit,
         "total_houses_on_sale": int(len(scored)),
         "str_filter_snapshot": [
-            "STR-supported neighborhood required",
-            "Private pool required (verified/inferred high-confidence)",
+            "STR-allowed neighborhoods",
             "Beds/Baths minimum: 2+/2+",
-            "STR hard-gate list price range: $150,000 to $1,500,000",
-            "Dashboard review queue cap: <= $1,500,000 list price",
-            "Preferred cities: Palm Springs, North Palm Springs, Cathedral City, Thousand Palms, Indio, Bermuda Dunes, Coachella, La Quinta, Palm Desert, Rancho Mirage, Desert Hot Springs, Indian Wells",
-            "ZIP must be in under-cap STR geography",
+            "Private pool required (verified/inferred high-confidence)",
+            "Under $1.5M list price",
+            "Preferred cities: Palm Springs, Bermuda Dunes, Indio",
+            "ZIP must be in approved under-cap STR neighborhood set",
         ],
+        "contract_policy": {
+            "annual_bookable_nights": _safe_float(contract_policy.get("annual_bookable_nights"), 365.0),
+            "max_str_bookings_per_year": _safe_float(contract_policy.get("max_str_bookings_per_year"), 26.0),
+            "avg_stay_nights_per_booking": _safe_float(contract_policy.get("avg_stay_nights_per_booking"), 4.0),
+        },
+        "mtr": {
+            "mtr_adr_multiplier": _safe_float(mtr.get("mtr_adr_multiplier"), 0.55),
+            "mtr_occupancy": _safe_float(mtr.get("mtr_occupancy"), 0.72),
+        },
+        "tier_benchmarks": tier_benchmarks,
     }
 
 
@@ -729,7 +714,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       background: radial-gradient(circle at top right, #e0ecff 0%, #f7f8fa 38%);
       color: var(--ink);
     }
-    .wrap { max-width: 1220px; margin: 24px auto 36px; padding: 0 18px; }
+    .wrap { width: 100%; margin: 24px 0 36px; padding: 0 18px; }
     .headcard {
       background: linear-gradient(120deg, #0f172a 0%, #1f2937 46%, #111827 100%);
       color: #eef2ff;
@@ -763,6 +748,25 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     .kpi .k { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
     .kpi .v { margin: 6px 0 0; font-size: 32px; font-weight: 800; color: var(--accent); line-height: 1; }
     .kpi .s { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+    .kpi details {
+      margin-top: 8px;
+      border-top: 1px solid #e5eaf2;
+      padding-top: 8px;
+    }
+    .kpi summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      color: #334155;
+      user-select: none;
+    }
+    .kpi details ul {
+      margin: 6px 0 0;
+      padding-left: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
     .module {
       background: var(--card);
       border: 1px solid var(--line);
@@ -791,90 +795,283 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       margin: 6px 0 0;
       padding-left: 18px;
     }
-    .rank-list {
-      display: grid;
-      gap: 10px;
-      margin-top: 14px;
-    }
-    .rank-row {
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 12px;
-      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-      display: grid;
-      gap: 12px;
-    }
-    .rank-head {
-      display: grid;
-      grid-template-columns: 120px 170px minmax(0, 1fr);
-      gap: 12px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--line);
-    }
-    .rank-body {
-      display: grid;
-      grid-template-columns: 1.2fr 1fr 1.2fr;
-      gap: 12px;
-    }
-    .group {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px;
-      background: #ffffff;
-    }
-    .group-title {
-      margin: 0 0 8px;
-      font-size: 12px;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-      color: #0f172a;
-    }
-    .metric-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px 10px;
-    }
-    .reason-group .label {
+    .overview-header-row {
       margin-top: 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      gap: 14px;
+      align-items: start;
     }
-    .reason-summary {
-      margin: 4px 0 0;
-      color: #334155;
-      font-size: 13px;
-      line-height: 1.4;
-      font-weight: 600;
-    }
-    .ai-line {
-      margin: 4px 0 0;
-      color: #334155;
-      font-size: 12px;
-      line-height: 1.4;
-      font-weight: 500;
-    }
-    .field {
+    .overview-summary {
       min-width: 0;
     }
-    .label {
-      margin: 0;
-      color: var(--label);
+    .finance-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: -3px;
+    }
+    .finance-widget {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+      padding: 12px;
+      width: min(420px, 100%);
+    }
+    .finance-widget h3 {
+      margin: 0 0 6px;
+      font-size: 16px;
+    }
+    .finance-sub {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .finance-group {
+      border-top: 1px solid #e2e8f0;
+      padding-top: 10px;
+      margin-top: 10px;
+    }
+    .finance-group:first-of-type {
+      border-top: none;
+      padding-top: 0;
+      margin-top: 0;
+    }
+    .finance-label {
+      margin: 0 0 6px;
+      color: #334155;
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: .05em;
       font-weight: 700;
     }
-    .value {
-      margin: 4px 0 0;
-      color: #0b1220;
-      font-size: 14px;
-      font-weight: 650;
-      line-height: 1.35;
-      word-break: break-word;
+    .finance-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: #0f172a;
     }
-    .value.rank {
-      color: var(--score);
-      font-size: 18px;
-      font-weight: 800;
+    .finance-option strong {
+      display: block;
+      font-size: 12px;
+    }
+    .finance-hint {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .finance-metrics {
+      margin: 8px 0 0;
+      display: grid;
+      gap: 6px;
+    }
+    .finance-metrics p {
+      margin: 0;
+      font-size: 12px;
+      color: #0f172a;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .constraint-panel {
+      border: 1px solid #c7d2fe;
+      border-radius: 10px;
+      background: linear-gradient(180deg, #ffffff 0%, #f5f9ff 100%);
+      padding: 10px;
+      margin: 4px 0;
+    }
+    .constraint-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    .constraint-group {
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+    }
+    .constraint-group h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+    .constraint-field { margin: 0 0 8px; }
+    .constraint-field label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 11px;
+      color: #334155;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .constraint-field input, .constraint-field select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+      background: #fff;
+    }
+    .constraint-tier-toggle {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .constraint-tier-toggle button {
+      border: none;
+      background: #fff;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 700;
+      color: #334155;
+    }
+    .constraint-tier-toggle button.active {
+      background: #bfdbfe;
+      color: #1e3a8a;
+    }
+    .constraint-formula {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: #0f172a;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .constraint-badge {
+      display: inline-block;
+      border: 1px solid #cbd5e1;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #334155;
+      background: #f8fafc;
+      margin-right: 5px;
+    }
+    .constraint-delta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .constraint-delta {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 8px;
+      background: #fff;
+    }
+    .constraint-delta p { margin: 0; }
+    .constraint-delta .k { font-size: 11px; color: #64748b; }
+    .constraint-delta .v { margin-top: 4px; font-size: 14px; font-weight: 800; color: #14532d; }
+    .constraint-delta .d { margin-top: 2px; font-size: 11px; color: #0f766e; font-weight: 700; }
+    .constraint-toggle-btn {
+      border: 1px solid #bfdbfe;
+      background: #dbeafe;
+      color: #1e3a8a;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 8px;
+      padding: 5px 8px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .constraint-note {
+      font-size: 11px;
+      color: #64748b;
+    }
+    .table-controls {
+      margin-top: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .table-controls .left,
+    .table-controls .right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .table-controls .left .filter-label {
+      margin-left: 8px;
+    }
+    .table-controls select,
+    .table-controls button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: #0f172a;
+      font-size: 12px;
+      padding: 6px 8px;
+    }
+    .table-controls button {
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .table-controls button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+    .table-wrap {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: auto;
+      background: #fff;
+      max-height: 70vh;
+    }
+    table.listings-table {
+      width: 100%;
+      min-width: 1700px;
+      border-collapse: separate;
+      border-spacing: 0;
+      font-size: 12px;
+      line-height: 1.2;
+    }
+    .listings-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #eef2ff;
+      color: #1e293b;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      font-size: 10px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+    }
+    .listings-table tbody td {
+      padding: 7px 10px;
+      border-bottom: 1px solid #eef2f7;
+      color: #0f172a;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+    .listings-table tbody tr:nth-child(even) td {
+      background: #f8fafc;
+    }
+    .listings-table tbody tr:hover td {
+      background: #eff6ff;
+    }
+    .col-address {
+      min-width: 300px;
+      white-space: normal !important;
+    }
+    .num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
     }
     .value.reason {
       font-size: 12px;
@@ -897,86 +1094,6 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       padding: 10px;
       background: #fafcff;
     }
-    .controls {
-      margin-top: 14px;
-      display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 8px;
-    }
-    .controls input, .controls select {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 8px 10px;
-      font-size: 13px;
-      background: #fff;
-      color: #0f172a;
-    }
-    .table-wrap {
-      margin-top: 12px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      overflow: auto;
-      background: #fff;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 1050px;
-    }
-    th, td {
-      border-bottom: 1px solid var(--line);
-      padding: 10px;
-      text-align: left;
-      font-size: 13px;
-      vertical-align: top;
-      white-space: nowrap;
-    }
-    th {
-      background: #f8fafc;
-      color: #0f172a;
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: .04em;
-    }
-    th[data-sort] {
-      cursor: pointer;
-    }
-    .pager {
-      margin-top: 10px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .pager button {
-      border: 1px solid var(--line);
-      background: #fff;
-      border-radius: 8px;
-      padding: 6px 10px;
-      cursor: pointer;
-      color: #0f172a;
-      font-size: 12px;
-    }
-    .assumptions {
-      margin-top: 14px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 12px;
-      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-    }
-    .assumptions p {
-      margin: 6px 0;
-      font-size: 13px;
-      color: #334155;
-    }
-    .assumptions .formula {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: #0f172a;
-      font-size: 12px;
-    }
     .chip {
       display: inline-block;
       margin-left: 6px;
@@ -990,17 +1107,14 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
     }
     @media (max-width: 1100px) {
       .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .rank-head { grid-template-columns: 110px 1fr; }
-      .rank-head .field:last-child { grid-column: span 2; }
-      .rank-body { grid-template-columns: 1fr; }
+      .overview-header-row { grid-template-columns: 1fr; }
+      .finance-toolbar { justify-content: stretch; }
+      .finance-widget { width: 100%; }
+      .constraint-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 700px) {
       .kpis { grid-template-columns: 1fr; }
-      .rank-head { grid-template-columns: 1fr; }
-      .rank-head .field:last-child { grid-column: auto; }
-      .metric-grid { grid-template-columns: 1fr; }
       .headline { font-size: 22px; }
-      .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -1008,7 +1122,7 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
   <div class="wrap">
     <section class="headcard">
       <p class="eyebrow">STR Investor Dashboard</p>
-      <h1 class="headline">Coachella Valley STR Review Queue</h1>
+      <h1 class="headline">Palm Springs / Bermuda Dunes / Indio STR Review Queue</h1>
       <p class="subline">High-level shortlist for which property to underwrite next.</p>
     </section>
     <section class="kpis">
@@ -1016,11 +1130,16 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         <p class="k">Total Listings</p>
         <p id="total-ingested" class="v">0</p>
         <p class="s">For-sale records scored</p>
+        <p id="full-scrape-at" class="s">Full scrape: unavailable</p>
       </article>
       <article class="kpi">
         <p class="k">STR Fit Passed</p>
         <p id="total-fit" class="v">0</p>
         <p class="s">Passed suitability filters</p>
+        <details>
+          <summary>STR Filters Applied</summary>
+          <ul id="str-filter-kpi-list"></ul>
+        </details>
       </article>
       <article class="kpi">
         <p class="k">Today's Listing Update</p>
@@ -1030,80 +1149,126 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       </article>
     </section>
     <section class="module">
-      <h2>Best Property Ranking for STR Review</h2>
-      <p id="priority-note" class="module-note"></p>
-      <div class="snapshot">
-        <strong>STR Filter Snapshot</strong><span class="chip">Coachella Valley</span>
-        <ul id="filter-snapshot"></ul>
+      <div class="overview-header-row">
+        <div class="overview-summary">
+          <h2>Listings Overview</h2>
+          <p id="priority-note" class="module-note"></p>
+          <div class="snapshot">
+            <strong>STR Filter Snapshot</strong><span class="chip">Palm Springs • Bermuda Dunes • Indio</span>
+            <ul id="filter-snapshot"></ul>
+          </div>
+        </div>
+        <div class="finance-toolbar">
+          <aside class="finance-widget">
+            <h3>Financing Options</h3>
+            <p class="finance-sub">Global scenario applied to all listings in this table.</p>
+            <div class="finance-group">
+              <p class="finance-label">Mortgage Mode</p>
+              <label class="finance-option">
+                <input id="mortgage-second-home" type="radio" name="mortgage-mode" value="second_home" checked />
+                <span><strong>Second Home</strong>5.75% rate, 10% down</span>
+              </label>
+              <label class="finance-option">
+                <input id="mortgage-investment" type="radio" name="mortgage-mode" value="investment_home" />
+                <span><strong>Investment Home</strong>6.25% rate, 25% down</span>
+              </label>
+            </div>
+            <div class="finance-group">
+              <p class="finance-label">Down Payment Source</p>
+              <label class="finance-option">
+                <input id="heloc-enabled" type="checkbox" checked />
+                <span><strong>HELOC enabled</strong>Use SF condo HELOC for down payment (interest-only).</span>
+              </label>
+              <p class="finance-hint">HELOC draw strategy: down payment only. HELOC APR: 8.50%.</p>
+            </div>
+            <div class="finance-group">
+              <p class="finance-label">Active Assumptions</p>
+              <div class="finance-metrics">
+                <p><span>Mortgage Rate</span><strong id="active-rate">5.75%</strong></p>
+                <p><span>Down Payment</span><strong id="active-down">10%</strong></p>
+                <p><span>HELOC</span><strong id="active-heloc">On</strong></p>
+              </div>
+            </div>
+          </aside>
+        </div>
       </div>
-      <div id="ranking-list" class="rank-list"></div>
-      <div id="priority-empty" class="empty"></div>
-    </section>
-    <section class="module">
-      <h2>STR-Pass Listings Table View</h2>
-      <p class="module-note">Sortable and filterable view for multi-listing comparison.</p>
-      <div id="table-controls" class="controls">
-        <input id="filter-city" type="text" placeholder="Filter city" />
-        <input id="filter-min-price" type="number" placeholder="Min price" />
-        <input id="filter-max-price" type="number" placeholder="Max price" />
-        <input id="filter-min-post-tax-coc" type="number" step="0.01" placeholder="Min post-tax COC (decimal)" />
-        <select id="sort-field">
-          <option value="coc_post_tax">Sort: Post-Tax COC</option>
-          <option value="coc_pre_tax">Sort: Pre-Tax COC</option>
-          <option value="annual_cash_flow_med">Sort: Cash Flow (Med)</option>
-          <option value="price_per_sqft">Sort: Price / SqFt</option>
-          <option value="list_price">Sort: List Price</option>
-          <option value="beds">Sort: Beds</option>
-          <option value="full_baths">Sort: Baths</option>
-          <option value="str_fit_score">Sort: STR Fit Score</option>
-        </select>
-        <select id="rows-per-page">
-          <option value="10">10 rows</option>
-          <option value="25" selected>25 rows</option>
-          <option value="50">50 rows</option>
-        </select>
+      <div class="table-controls">
+        <div class="left">
+          <span id="table-count"></span>
+          <label class="filter-label" for="city-filter">City</label>
+          <select id="city-filter">
+            <option value="all" selected>All</option>
+          </select>
+          <label for="rows-per-page">Rows/page</label>
+          <select id="rows-per-page">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+        <div class="right">
+          <button id="page-prev" type="button">Prev</button>
+          <span id="page-indicator"></span>
+          <button id="page-next" type="button">Next</button>
+        </div>
       </div>
       <div class="table-wrap">
-        <table id="listings-table">
+        <table class="listings-table">
           <thead>
             <tr>
-              <th data-sort="address">Address</th>
-              <th data-sort="city">City</th>
-              <th data-sort="neighborhood">Neighborhood</th>
-              <th data-sort="list_price">List Price</th>
-              <th data-sort="price_per_sqft">Price / SqFt</th>
-              <th data-sort="beds">Beds</th>
-              <th data-sort="full_baths">Baths</th>
-              <th data-sort="sqft">SqFt</th>
-              <th data-sort="lot_sqft">Lot SqFt</th>
-              <th data-sort="coc_pre_tax">Pre-Tax COC</th>
-              <th data-sort="coc_post_tax">Post-Tax COC</th>
-              <th data-sort="annual_cash_flow_med">Annual Cash Flow (Med)</th>
-              <th data-sort="str_fit_score">STR Fit Score</th>
-              <th>Link</th>
+              <th data-sort-key="rank" data-sort-type="number">Rank</th>
+              <th data-sort-key="property_id" data-sort-type="string">Property ID</th>
+              <th data-sort-key="address" data-sort-type="string">Address</th>
+              <th data-sort-key="city" data-sort-type="string">City</th>
+              <th data-sort-key="zip_code" data-sort-type="string">ZIP</th>
+              <th data-sort-key="list_price" data-sort-type="number">List Price</th>
+              <th data-sort-key="sqft" data-sort-type="number">Sq Ft</th>
+              <th data-sort-key="price_per_sqft" data-sort-type="number">Price / Sq Ft</th>
+              <th data-sort-key="beds" data-sort-type="number">Beds</th>
+              <th data-sort-key="full_baths" data-sort-type="number">Baths</th>
+              <th data-sort-key="coc_pre_tax" data-sort-type="number">Pre-Tax COC</th>
+              <th data-sort-key="coc_post_tax" data-sort-type="number">Post-Tax COC</th>
+              <th data-sort-key="annual_cash_flow_med" data-sort-type="number">Annual Cash Flow (Med)</th>
+              <th data-sort-key="adr_med" data-sort-type="number">ADR (Med)</th>
+              <th data-sort-key="occ_med" data-sort-type="number">Occ (Med)</th>
+              <th data-sort-key="total_cash_cost_to_buy" data-sort-type="number">Total Cash To Buy</th>
+              <th data-sort-key="monthly_debt_payment" data-sort-type="number">Monthly Debt</th>
+              <th data-sort-key="str_fit_score" data-sort-type="number">STR Fit Score</th>
+              <th>Palm Springs Constraints</th>
             </tr>
           </thead>
-          <tbody id="table-body"></tbody>
+          <tbody id="ranking-list"></tbody>
         </table>
       </div>
-      <div class="pager">
-        <button id="prev-page" type="button">Previous</button>
-        <span id="table-page-status">Page 1 of 1</span>
-        <button id="next-page" type="button">Next</button>
-      </div>
-      <div id="table-empty" class="empty"></div>
-    </section>
-    <section class="module">
-      <h2>COC Assumptions and Formula Summary</h2>
-      <div id="assumptions-panel" class="assumptions"></div>
+      <div id="priority-empty" class="empty"></div>
     </section>
   </div>
 <script>
 const payload = __PAYLOAD_JSON__;
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (v) => `${(Number(v || 0) * 100).toFixed(2)}%`;
-const score100 = (v) => (Number(v || 0) * 100).toFixed(1);
-let tableState = { page: 1, pageSize: 25, sortField: 'coc_post_tax', sortDir: 'desc' };
+const sourceBadge = (source) => {
+  const isManual = String(source || '').toLowerCase() === 'manual';
+  return `<span class="constraint-badge">${isManual ? 'MANUAL' : 'AUTO'}</span>`;
+};
+let currentPage = 1;
+let rowsPerPage = 50;
+let sortedRows = [];
+let filteredRows = [];
+let activeSortKey = 'coc_post_tax';
+let activeSortDirection = 'desc';
+let activeCityFilter = 'all';
+const financingConfig = {
+  second_home: { rateAnnual: 0.0575, downPct: 0.10, labelRate: '5.75%', labelDown: '10%' },
+  investment_home: { rateAnnual: 0.0625, downPct: 0.25, labelRate: '6.25%', labelDown: '25%' },
+  helocRateAnnual: 0.085,
+  loanTermYears: 30,
+  baselineDownPct: 0.10,
+};
+let activeMortgageMode = 'second_home';
+let helocEnabled = true;
+let scenarioRows = [];
+const rowConstraintState = {};
 const pullTimestampFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Los_Angeles',
   year: 'numeric',
@@ -1122,228 +1287,371 @@ function formatPullTimestamp(rawValue) {
   return `Last run date: ${pullTimestampFormatter.format(parsed)}`;
 }
 
+function formatFullScrapeTimestamp(rawValue) {
+  if (!rawValue) return 'Full scrape: unavailable';
+  const parsed = new Date(rawValue);
+  if (Number.isNaN(parsed.getTime())) return 'Full scrape: unavailable';
+  return `Full scrape: ${pullTimestampFormatter.format(parsed)}`;
+}
+
 function formatListingUpdateDetail(fetchedRows, newRows) {
   const fetched = Number(fetchedRows || 0);
   const netNew = Number(newRows || 0);
   return `Fetched ${fetched.toLocaleString()} listings, ${netNew.toLocaleString()} were new.`;
 }
 
-function renderPriorityRanking() {
-  const container = document.getElementById('ranking-list');
-  const empty = document.getElementById('priority-empty');
-  container.innerHTML = '';
-
-  const rows = payload.top_properties_palm_springs_priority || [];
-  if (!rows.length) {
-    empty.style.display = 'block';
-    empty.textContent = 'No Coachella Valley priority candidates in the current dataset.';
-    return;
-  }
-
-  empty.style.display = 'none';
-  rows.forEach((p, idx) => {
-    const rank = String(idx + 1);
-    const listing = p.property_url
-      ? `<a class="link" href="${p.property_url}">View Listing</a>`
-      : '<span style="color:#94a3b8">No link</span>';
-    const reasonSummary = p.priority_reason_summary || 'Balanced STR value profile.';
-    const aiPotential = p.ai_insight_potential || 'Potential: no specific upside note available.';
-    const aiRisk = p.ai_insight_risk || 'Risk: no major risk note available.';
-
-    const row = document.createElement('article');
-    row.className = 'rank-row';
-    row.innerHTML = `
-      <div class="rank-head">
-        <div class="field"><p class="label">Rank</p><p class="value rank">${rank}</p></div>
-        <div class="field"><p class="label">Property ID</p><p class="value">${p.property_id || 'n/a'}</p></div>
-        <div class="field"><p class="label">Address</p><p class="value">${p.address || 'n/a'}<br>${listing}</p></div>
-      </div>
-      <div class="rank-body">
-        <section class="group">
-          <h3 class="group-title">What You Pay</h3>
-          <div class="metric-grid">
-            <div class="field"><p class="label">List Price</p><p class="value">${currency.format(Number(p.list_price || 0))}</p></div>
-            <div class="field"><p class="label">Price / Sq Ft</p><p class="value">${currency.format(Number(p.price_per_sqft || 0))}</p></div>
-            <div class="field"><p class="label">Lot Size</p><p class="value">${Number(p.lot_sqft || 0).toLocaleString()}</p></div>
-            <div class="field"><p class="label">Bedrooms</p><p class="value">${Number(p.beds || 0).toFixed(0)}</p></div>
-            <div class="field"><p class="label">Bathrooms</p><p class="value">${Number(p.full_baths || 0).toFixed(1)}</p></div>
-          </div>
-        </section>
-        <section class="group">
-          <h3 class="group-title">Expected Return</h3>
-          <div class="metric-grid">
-            <div class="field"><p class="label">Priority Score</p><p class="value">${score100(p.priority_score)}</p></div>
-            <div class="field"><p class="label">Pre-Tax COC</p><p class="value">${pct(p.coc_pre_tax)}</p></div>
-            <div class="field"><p class="label">Post-Tax COC</p><p class="value">${pct(p.coc_post_tax)}</p></div>
-            <div class="field"><p class="label">Annual Cash Flow (Med)</p><p class="value">${currency.format(Number(p.annual_cash_flow_med || 0))}</p></div>
-          </div>
-        </section>
-        <section class="group reason-group">
-          <h3 class="group-title">Reason</h3>
-          <p class="label">Ranking Driver</p>
-          <p class="reason-summary">${reasonSummary}</p>
-          <p class="label">AI Property Insight</p>
-          <p class="ai-line">${aiPotential}</p>
-          <p class="ai-line">${aiRisk}</p>
-        </section>
-      </div>
-    `;
-    container.appendChild(row);
-  });
+function formatInt(value) {
+  return Number(value || 0).toLocaleString();
 }
 
-function _toNum(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
+function asPct(value) {
+  return `${(Number(value || 0) * 100).toFixed(2)}%`;
 }
 
-function getFilteredTableRows() {
-  const rows = payload.table_rows || [];
-  const cityNeedle = (document.getElementById('filter-city').value || '').trim().toLowerCase();
-  const minPrice = document.getElementById('filter-min-price').value;
-  const maxPrice = document.getElementById('filter-max-price').value;
-  const minPostTaxCoc = document.getElementById('filter-min-post-tax-coc').value;
-  const minPriceNum = minPrice === '' ? null : Number(minPrice);
-  const maxPriceNum = maxPrice === '' ? null : Number(maxPrice);
-  const minCocNum = minPostTaxCoc === '' ? null : Number(minPostTaxCoc);
+function toTierView(scenarioTier) {
+  return String(scenarioTier || '').toLowerCase() === 'palm_springs_luxury' ? 'luxury' : 'average';
+}
 
-  return rows.filter((r) => {
-    if (cityNeedle && !(String(r.city || '').toLowerCase().includes(cityNeedle))) return false;
-    if (minPriceNum !== null && _toNum(r.list_price) < minPriceNum) return false;
-    if (maxPriceNum !== null && _toNum(r.list_price) > maxPriceNum) return false;
-    if (minCocNum !== null && _toNum(r.coc_post_tax) < minCocNum) return false;
-    return true;
-  });
+function isPalmSpringsRow(row) {
+  return String(row?.city || '').trim().toLowerCase() === 'palm springs';
+}
+
+function mortgagePayment(principal, annualRate, years) {
+  if (principal <= 0) return 0;
+  const monthlyRate = annualRate / 12;
+  const months = years * 12;
+  if (monthlyRate <= 0 || months <= 0) return principal / Math.max(1, months);
+  const factor = Math.pow(1 + monthlyRate, months);
+  return principal * ((monthlyRate * factor) / (factor - 1));
+}
+
+function scenarioForRow(row) {
+  const loan = financingConfig[activeMortgageMode] || financingConfig.second_home;
+  const listPrice = Number(row.list_price || 0);
+  const downPayment = listPrice * loan.downPct;
+  const primaryLoan = Math.max(0, listPrice - downPayment);
+  const monthlyMortgage = mortgagePayment(primaryLoan, loan.rateAnnual, financingConfig.loanTermYears);
+  const helocDraw = helocEnabled ? downPayment : 0;
+  const monthlyHeloc = helocEnabled ? (helocDraw * financingConfig.helocRateAnnual) / 12 : 0;
+  const monthlyDebtPayment = monthlyMortgage + monthlyHeloc;
+
+  const baselineCashToBuy = Number(row.total_cash_cost_to_buy || 0);
+  const baselineDownPayment = listPrice * financingConfig.baselineDownPct;
+  const baselineOtherCash = Math.max(0, baselineCashToBuy - baselineDownPayment);
+  const totalCashToBuy = baselineOtherCash + downPayment - helocDraw;
+
+  const baselineAnnualCashFlow = Number(row.annual_cash_flow_med || 0);
+  const baselineAnnualDebt = Number(row.monthly_debt_payment || 0) * 12;
+  const annualCashBeforeDebt = baselineAnnualCashFlow + baselineAnnualDebt;
+  const annualCashFlowMed = annualCashBeforeDebt - (monthlyDebtPayment * 12);
+
+  const baselineCocPost = Number(row.coc_post_tax || 0);
+  const baselineAnnualPostTax = baselineCocPost * baselineCashToBuy;
+  const postTaxDelta = baselineAnnualPostTax - baselineAnnualCashFlow;
+  const annualCashFlowPostTax = annualCashFlowMed + postTaxDelta;
+
+  const cocPreTax = totalCashToBuy > 0 ? (annualCashFlowMed / totalCashToBuy) : 0;
+  const cocPostTax = totalCashToBuy > 0 ? (annualCashFlowPostTax / totalCashToBuy) : 0;
+
+  return {
+    ...row,
+    monthly_debt_payment: monthlyDebtPayment,
+    total_cash_cost_to_buy: totalCashToBuy,
+    annual_cash_flow_med: annualCashFlowMed,
+    coc_pre_tax: cocPreTax,
+    coc_post_tax: cocPostTax,
+  };
+}
+
+function constraintScenarioForRow(row, state) {
+  if (!row) return null;
+  const contractPolicy = payload.contract_policy || {};
+  const mtrPolicy = payload.mtr || {};
+  const annualNights = Number(contractPolicy.annual_bookable_nights || 365);
+  const maxBookings = Number(contractPolicy.max_str_bookings_per_year || 26);
+  const avgStay = Math.max(1, Number(state.avgStay || 0));
+  const strNights = Math.min(annualNights, maxBookings * avgStay);
+  const mtrNights = Math.max(0, annualNights - strNights);
+
+  const strOcc = Number(row.occupancy_final || row.occ_med || 0);
+  const adr = Math.max(0, Number(state.adr || 0));
+  const mtrAdrMultiplier = Number(mtrPolicy.mtr_adr_multiplier || 0.55);
+  const mtrOcc = Number(mtrPolicy.mtr_occupancy || 0.72);
+  const mtrAdr = adr * mtrAdrMultiplier;
+
+  const strRevenue = strNights * adr * strOcc;
+  const mtrRevenue = mtrNights * mtrAdr * mtrOcc;
+  const blendedRevenue = strRevenue + mtrRevenue;
+
+  const baselineRevenue = Number(row.annual_revenue_med || 0);
+  const revenueDelta = blendedRevenue - baselineRevenue;
+  const variableRatio = Number(row.operating_variable_ratio || 0);
+  const operatingDelta = revenueDelta * variableRatio;
+
+  const baselineAnnualCashFlow = Number(row.annual_cash_flow_med || 0);
+  const adjustedAnnualCashFlow = baselineAnnualCashFlow + revenueDelta - operatingDelta;
+
+  const baselineCocPost = Number(row.coc_post_tax || 0);
+  const baselineCashToBuy = Number(row.total_cash_cost_to_buy || 0);
+  const baselineAnnualPostTax = baselineCocPost * baselineCashToBuy;
+  const postTaxDelta = baselineAnnualPostTax - baselineAnnualCashFlow;
+  const adjustedAnnualPostTax = adjustedAnnualCashFlow + postTaxDelta;
+
+  const cocPreTax = baselineCashToBuy > 0 ? adjustedAnnualCashFlow / baselineCashToBuy : 0;
+  const cocPostTax = baselineCashToBuy > 0 ? adjustedAnnualPostTax / baselineCashToBuy : 0;
+
+  return {
+    strNights,
+    mtrNights,
+    strShare: annualNights > 0 ? strNights / annualNights : 0,
+    mtrShare: annualNights > 0 ? mtrNights / annualNights : 0,
+    blendedRevenue,
+    annualCashFlow: adjustedAnnualCashFlow,
+    preTaxCoc: cocPreTax,
+    postTaxCoc: cocPostTax,
+    baselineAnnualCashFlow,
+    baselinePreTaxCoc: Number(row.coc_pre_tax || 0),
+    baselinePostTaxCoc: baselineCocPost,
+  };
+}
+
+function computeScenarioRows() {
+  scenarioRows = (payload.homes || []).map((row) => scenarioForRow(row));
+}
+
+function getSortValue(row, key, type, rankIndex) {
+  if (key === 'rank') return rankIndex;
+  const raw = row?.[key];
+  if (type === 'number') return Number(raw || 0);
+  return String(raw || '').toLowerCase();
 }
 
 function sortRows(rows) {
-  const field = tableState.sortField;
-  const dir = tableState.sortDir === 'asc' ? 1 : -1;
+  const typeMap = {
+    rank: 'number',
+    property_id: 'string',
+    address: 'string',
+    city: 'string',
+    zip_code: 'string',
+    list_price: 'number',
+    sqft: 'number',
+    price_per_sqft: 'number',
+    beds: 'number',
+    full_baths: 'number',
+    coc_pre_tax: 'number',
+    coc_post_tax: 'number',
+    annual_cash_flow_med: 'number',
+    adr_med: 'number',
+    occ_med: 'number',
+    total_cash_cost_to_buy: 'number',
+    monthly_debt_payment: 'number',
+    str_fit_score: 'number',
+    property_url: 'string',
+  };
+  const sortType = typeMap[activeSortKey] || 'string';
   return [...rows].sort((a, b) => {
-    const av = a[field];
-    const bv = b[field];
-    if (typeof av === 'string' || typeof bv === 'string') {
-      return dir * String(av || '').localeCompare(String(bv || ''));
-    }
-    const delta = _toNum(av) - _toNum(bv);
-    if (delta !== 0) return dir * delta;
+    const aValue = getSortValue(a, activeSortKey, sortType, 0);
+    const bValue = getSortValue(b, activeSortKey, sortType, 0);
+    if (aValue < bValue) return activeSortDirection === 'asc' ? -1 : 1;
+    if (aValue > bValue) return activeSortDirection === 'asc' ? 1 : -1;
+    const cocDelta = Number(b.coc_post_tax || 0) - Number(a.coc_post_tax || 0);
+    if (cocDelta !== 0) return cocDelta;
+    const scoreDelta = Number(b.str_fit_score || 0) - Number(a.str_fit_score || 0);
+    if (scoreDelta !== 0) return scoreDelta;
     return String(a.property_id || '').localeCompare(String(b.property_id || ''));
   });
 }
 
-function renderTable() {
-  const body = document.getElementById('table-body');
-  const empty = document.getElementById('table-empty');
-  const status = document.getElementById('table-page-status');
-  body.innerHTML = '';
-
-  const filtered = sortRows(getFilteredTableRows());
-  const total = filtered.length;
-  const pages = Math.max(1, Math.ceil(total / tableState.pageSize));
-  tableState.page = Math.max(1, Math.min(tableState.page, pages));
-  const start = (tableState.page - 1) * tableState.pageSize;
-  const pageRows = filtered.slice(start, start + tableState.pageSize);
-
-  if (!pageRows.length) {
-    empty.style.display = 'block';
-    empty.textContent = 'No listings match the current filters.';
-  } else {
-    empty.style.display = 'none';
-  }
-
-  pageRows.forEach((r) => {
-    const tr = document.createElement('tr');
-    const link = r.property_url ? `<a class="link" href="${r.property_url}">Open</a>` : '<span style="color:#94a3b8">n/a</span>';
-    tr.innerHTML = `
-      <td>${r.address || 'n/a'}</td>
-      <td>${r.city || 'n/a'}</td>
-      <td>${r.neighborhood || 'n/a'}</td>
-      <td>${currency.format(_toNum(r.list_price))}</td>
-      <td>${currency.format(_toNum(r.price_per_sqft))}</td>
-      <td>${_toNum(r.beds).toFixed(0)}</td>
-      <td>${_toNum(r.full_baths).toFixed(1)}</td>
-      <td>${_toNum(r.sqft).toLocaleString()}</td>
-      <td>${_toNum(r.lot_sqft).toLocaleString()}</td>
-      <td>${pct(_toNum(r.coc_pre_tax))}</td>
-      <td>${pct(_toNum(r.coc_post_tax))}</td>
-      <td>${currency.format(_toNum(r.annual_cash_flow_med))}</td>
-      <td>${_toNum(r.str_fit_score).toFixed(0)}</td>
-      <td>${link}</td>
-    `;
-    body.appendChild(tr);
-  });
-
-  status.textContent = `Page ${tableState.page} of ${pages} (${total.toLocaleString()} rows)`;
-  document.getElementById('prev-page').disabled = tableState.page <= 1;
-  document.getElementById('next-page').disabled = tableState.page >= pages;
+function applyCityFilter(rows) {
+  const normalizedFilter = String(activeCityFilter || 'all').trim().toLowerCase();
+  if (normalizedFilter === 'all') return rows;
+  return rows.filter((row) => String(row?.city || '').trim().toLowerCase() === normalizedFilter);
 }
 
-function renderAssumptionsPanel() {
-  const panel = document.getElementById('assumptions-panel');
-  const data = payload.coc_assumptions_summary || {};
-  if (!Object.keys(data).length) {
-    panel.innerHTML = '<p>Assumptions summary unavailable.</p>';
+function updateFinancingSummary() {
+  const loan = financingConfig[activeMortgageMode] || financingConfig.second_home;
+  document.getElementById('active-rate').textContent = loan.labelRate;
+  document.getElementById('active-down').textContent = loan.labelDown;
+  document.getElementById('active-heloc').textContent = helocEnabled ? 'On' : 'Off';
+}
+
+function renderSortIndicators() {
+  document.querySelectorAll('.listings-table thead th[data-sort-key]').forEach((th) => {
+    const key = th.getAttribute('data-sort-key');
+    const baseLabel = th.textContent.replace(/\\s+[↑↓]$/, '');
+    th.textContent = baseLabel;
+    if (key === activeSortKey) {
+      th.textContent = `${baseLabel} ${activeSortDirection === 'asc' ? '↑' : '↓'}`;
+    }
+  });
+}
+
+function renderPriorityRanking() {
+  const container = document.getElementById('ranking-list');
+  const empty = document.getElementById('priority-empty');
+  const count = document.getElementById('table-count');
+  const indicator = document.getElementById('page-indicator');
+  const prev = document.getElementById('page-prev');
+  const next = document.getElementById('page-next');
+  container.innerHTML = '';
+
+  filteredRows = applyCityFilter(scenarioRows);
+  sortedRows = sortRows(filteredRows);
+
+  if (!sortedRows.length) {
+    empty.style.display = 'block';
+    empty.textContent = 'No STR-fit listings in the current dataset.';
+    count.textContent = '0 listings';
+    indicator.textContent = 'Page 0 / 0';
+    prev.disabled = true;
+    next.disabled = true;
     return;
   }
 
-  const tax = data.tax || {};
-  const financing = data.financing || {};
-  const cost = data.cost_model || {};
+  empty.style.display = 'none';
+  const totalPages = Math.max(1, Math.ceil(sortedRows.length / rowsPerPage));
+  if (currentPage > totalPages) currentPage = totalPages;
+  const start = (currentPage - 1) * rowsPerPage;
+  const pageRows = sortedRows.slice(start, start + rowsPerPage);
 
-  panel.innerHTML = `
-    <p class="formula">${data.pre_tax_formula || ''}</p>
-    <p class="formula">${data.post_tax_formula || ''}</p>
-    <p>${data.note || ''}</p>
-    <p><strong>Tax Inputs:</strong> Effective tax ${(100 * _toNum(tax.effective_combined_tax_rate)).toFixed(1)}%, analysis year ${_toNum(tax.analysis_year).toFixed(0)}, building allocation ${(100 * _toNum(tax.building_allocation_pct)).toFixed(1)}%, recovery ${_toNum(tax.standard_recovery_years).toFixed(1)} years, cost-seg start year ${_toNum(tax.cost_seg_start_year).toFixed(0)}, cost-seg bonus ${(100 * _toNum(tax.cost_seg_bonus_pct)).toFixed(1)}%.</p>
-    <p><strong>Financing Inputs:</strong> Down payment ${(100 * _toNum(financing.down_payment_pct)).toFixed(1)}%, interest ${(100 * _toNum(financing.interest_rate_annual)).toFixed(2)}%, loan term ${_toNum(financing.loan_term_years).toFixed(0)} years.</p>
-    <p><strong>Core Opex Ratios:</strong> Management ${(100 * _toNum(cost.management_fee_pct)).toFixed(1)}%, capex ${(100 * _toNum(cost.capex_pct)).toFixed(1)}%, maintenance ${(100 * _toNum(cost.maintenance_pct)).toFixed(1)}%, vacancy buffer ${(100 * _toNum(cost.vacancy_buffer_pct)).toFixed(1)}%, turnover buffer ${(100 * _toNum(cost.turnover_buffer_pct)).toFixed(1)}%.</p>
-    <p>${data.caveat || ''}</p>
-  `;
+  pageRows.forEach((p, idx) => {
+    const state = getConstraintState(p);
+    const isPs = isPalmSpringsRow(p);
+    const tr = document.createElement('tr');
+    const rank = start + idx + 1;
+    const addressCell = p.property_url
+      ? `<a class="link" href="${p.property_url}">${p.address || 'n/a'}</a>`
+      : (p.address || 'n/a');
+    const constraintCell = isPs
+      ? `<button type="button" class="constraint-toggle-btn" data-property-id="${p.property_id}" data-action="toggle">${state.open ? 'Hide Constraints' : 'Show Constraints'}</button>`
+      : '<span class="constraint-note"></span>';
+    tr.innerHTML = `
+      <td class="num">${rank}</td>
+      <td>${p.property_id || 'n/a'}</td>
+      <td class="col-address">${addressCell}</td>
+      <td>${p.city || 'n/a'}</td>
+      <td>${p.zip_code || 'n/a'}</td>
+      <td class="num">${currency.format(Number(p.list_price || 0))}</td>
+      <td class="num">${formatInt(p.sqft)}</td>
+      <td class="num">${currency.format(Number(p.price_per_sqft || 0))}</td>
+      <td class="num">${Number(p.beds || 0).toFixed(0)}</td>
+      <td class="num">${Number(p.full_baths || 0).toFixed(1)}</td>
+      <td class="num">${pct(p.coc_pre_tax)}</td>
+      <td class="num">${pct(p.coc_post_tax)}</td>
+      <td class="num">${currency.format(Number(p.annual_cash_flow_med || 0))}</td>
+      <td class="num">${currency.format(Number(p.adr_final || p.adr_med || 0))} ${sourceBadge(p.adr_source)}</td>
+      <td class="num">${pct(p.occupancy_final || p.occ_med)} ${sourceBadge(p.occupancy_source)}</td>
+      <td class="num">${currency.format(Number(p.total_cash_cost_to_buy || 0))}</td>
+      <td class="num">${currency.format(Number(p.monthly_debt_payment || 0))}</td>
+      <td class="num">${Number(p.str_fit_score || 0).toFixed(0)}</td>
+      <td>${constraintCell}</td>
+    `;
+    container.appendChild(tr);
+
+    if (isPs && state.open) {
+      const detailTr = document.createElement('tr');
+      detailTr.innerHTML = `<td colspan="19">${renderConstraintDetail(p, state)}</td>`;
+      container.appendChild(detailTr);
+    }
+  });
+
+  count.textContent = `${sortedRows.length.toLocaleString()} listings`;
+  indicator.textContent = `Page ${currentPage} / ${totalPages}`;
+  prev.disabled = currentPage <= 1;
+  next.disabled = currentPage >= totalPages;
 }
 
-function bindTableControls() {
-  ['filter-city', 'filter-min-price', 'filter-max-price', 'filter-min-post-tax-coc'].forEach((id) => {
-    document.getElementById(id).addEventListener('input', () => {
-      tableState.page = 1;
-      renderTable();
-    });
-  });
-  document.getElementById('rows-per-page').addEventListener('change', (e) => {
-    tableState.pageSize = Number(e.target.value || 25);
-    tableState.page = 1;
-    renderTable();
-  });
-  document.getElementById('sort-field').addEventListener('change', (e) => {
-    tableState.sortField = e.target.value || 'coc_post_tax';
-    tableState.page = 1;
-    renderTable();
-  });
-  document.querySelectorAll('th[data-sort]').forEach((th) => {
-    th.addEventListener('click', () => {
-      const field = th.getAttribute('data-sort');
-      if (!field) return;
-      if (tableState.sortField === field) {
-        tableState.sortDir = tableState.sortDir === 'asc' ? 'desc' : 'asc';
-      } else {
-        tableState.sortField = field;
-        tableState.sortDir = 'desc';
-      }
-      tableState.page = 1;
-      renderTable();
-    });
-  });
-  document.getElementById('prev-page').addEventListener('click', () => {
-    tableState.page = Math.max(1, tableState.page - 1);
-    renderTable();
-  });
-  document.getElementById('next-page').addEventListener('click', () => {
-    tableState.page += 1;
-    renderTable();
-  });
+function getConstraintState(row) {
+  const propertyId = String(row.property_id || '');
+  if (!rowConstraintState[propertyId]) {
+    const contractPolicy = payload.contract_policy || {};
+    rowConstraintState[propertyId] = {
+      open: false,
+      tier: toTierView(row.scenario_tier),
+      adr: Number(row.adr_med || 0),
+      avgStay: Number(contractPolicy.avg_stay_nights_per_booking || 4),
+    };
+  }
+  return rowConstraintState[propertyId];
+}
+
+function renderConstraintDetail(row, state) {
+  const scenario = constraintScenarioForRow(row, state);
+  if (!scenario) return '';
+  const contractPolicy = payload.contract_policy || {};
+  const mtrPolicy = payload.mtr || {};
+  const preDelta = scenario.preTaxCoc - scenario.baselinePreTaxCoc;
+  const postDelta = scenario.postTaxCoc - scenario.baselinePostTaxCoc;
+  const cashDelta = scenario.annualCashFlow - scenario.baselineAnnualCashFlow;
+  const propertyId = String(row.property_id || '');
+  return `
+    <div class="constraint-panel">
+      <div class="constraint-grid">
+        <div class="constraint-group">
+          <h4>Palm Springs Constraint Inputs (Listing-Level)</h4>
+          <div class="constraint-field">
+            <label>Tier</label>
+            <div class="constraint-tier-toggle">
+              <button type="button" class="constraint-tier-btn ${state.tier === 'average' ? 'active' : ''}" data-property-id="${propertyId}" data-tier="average">Average</button>
+              <button type="button" class="constraint-tier-btn ${state.tier === 'luxury' ? 'active' : ''}" data-property-id="${propertyId}" data-tier="luxury">Luxury</button>
+            </div>
+          </div>
+          <div class="constraint-field">
+            <label for="constraint-adr-${propertyId}">ADR ($)</label>
+            <input id="constraint-adr-${propertyId}" type="number" min="0" step="5" value="${Math.round(state.adr)}" data-property-id="${propertyId}" data-field="adr" />
+          </div>
+          <div class="constraint-field">
+            <label for="constraint-stay-${propertyId}">Avg Stay (nights)</label>
+            <input id="constraint-stay-${propertyId}" type="number" min="1" max="30" step="0.5" value="${Number(state.avgStay).toFixed(1)}" data-property-id="${propertyId}" data-field="avg_stay" />
+          </div>
+          <p class="finance-hint">Max STR contracts/year: <strong>${Number(contractPolicy.max_str_bookings_per_year || 26)}</strong></p>
+          <p class="finance-hint">MTR ADR multiplier: <strong>${Number(mtrPolicy.mtr_adr_multiplier || 0.55).toFixed(2)}x</strong></p>
+          <p class="finance-hint">MTR occupancy: <strong>${asPct(Number(mtrPolicy.mtr_occupancy || 0.72))}</strong></p>
+        </div>
+        <div class="constraint-group">
+          <h4>Constraint Math</h4>
+          <p class="constraint-formula"><span>Tier</span><strong>${String(row.tier_final || row.scenario_tier || 'n/a')} (${String(row.tier_source || 'auto').toUpperCase()})</strong></p>
+          <p class="constraint-formula"><span>ADR / OCC Baseline</span><strong>${currency.format(Number(row.adr_final || row.adr_med || 0))} / ${asPct(Number(row.occupancy_final || row.occ_med || 0))}</strong></p>
+          <p class="constraint-formula"><span>Override Note</span><strong>${String(row.override_note || '').trim() || 'n/a'}</strong></p>
+          <p class="constraint-formula"><span>STR nights = min(365, 26 × avg_stay)</span><strong>${Math.round(scenario.strNights)} nights</strong></p>
+          <p class="constraint-formula"><span>MTR nights = 365 - STR nights</span><strong>${Math.round(scenario.mtrNights)} nights</strong></p>
+          <p class="constraint-formula"><span>STR/MTR split</span><strong>${asPct(scenario.strShare)} / ${asPct(scenario.mtrShare)}</strong></p>
+          <p class="constraint-formula"><span>Blended revenue</span><strong>${currency.format(scenario.blendedRevenue)}</strong></p>
+          <p>
+            <span class="constraint-badge">26-cap</span>
+            <span class="constraint-badge">STR ${Math.round(scenario.strNights)}n</span>
+            <span class="constraint-badge">MTR ${Math.round(scenario.mtrNights)}n</span>
+            <span class="constraint-badge">${(scenario.strShare * 100).toFixed(0)}/${(scenario.mtrShare * 100).toFixed(0)} split</span>
+          </p>
+        </div>
+      </div>
+      <div class="constraint-group" style="margin-top: 12px;">
+        <h4>Impact vs Baseline</h4>
+        <div class="constraint-delta-grid">
+          <article class="constraint-delta">
+            <p class="k">Pre-Tax CoC</p>
+            <p class="v">${pct(scenario.preTaxCoc)}</p>
+            <p class="d">${preDelta >= 0 ? '+' : ''}${(preDelta * 100).toFixed(2)} pts</p>
+          </article>
+          <article class="constraint-delta">
+            <p class="k">Post-Tax CoC</p>
+            <p class="v">${pct(scenario.postTaxCoc)}</p>
+            <p class="d">${postDelta >= 0 ? '+' : ''}${(postDelta * 100).toFixed(2)} pts</p>
+          </article>
+          <article class="constraint-delta">
+            <p class="k">Annual Cash Flow</p>
+            <p class="v">${currency.format(scenario.annualCashFlow)}</p>
+            <p class="d">${cashDelta >= 0 ? '+' : '-'}${currency.format(Math.abs(cashDelta))}</p>
+          </article>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function init() {
   document.getElementById('total-ingested').textContent = String(payload.total_ingested || 0);
+  document.getElementById('full-scrape-at').textContent = formatFullScrapeTimestamp(payload.full_scrape_completed_at);
   document.getElementById('total-fit').textContent = String(payload.total_str_fit_passed || 0);
   document.getElementById('new-listings-today').textContent = String(payload.new_listings_today || 0);
   document.getElementById('listing-update-detail').textContent = formatListingUpdateDetail(
@@ -1351,20 +1659,141 @@ function init() {
     payload.new_listings_today,
   );
   document.getElementById('listings-pulled-at').textContent = formatPullTimestamp(payload.listings_pulled_at);
-  document.getElementById('priority-note').textContent = payload.priority_ranking_note || '';
+  document.getElementById('priority-note').textContent = 'STR-fit listings sorted by post-tax COC (desc), then STR fit score.';
+
+  document.getElementById('mortgage-second-home').addEventListener('change', () => {
+    activeMortgageMode = 'second_home';
+    currentPage = 1;
+    computeScenarioRows();
+    updateFinancingSummary();
+    renderPriorityRanking();
+  });
+  document.getElementById('mortgage-investment').addEventListener('change', () => {
+    activeMortgageMode = 'investment_home';
+    currentPage = 1;
+    computeScenarioRows();
+    updateFinancingSummary();
+    renderPriorityRanking();
+  });
+  document.getElementById('heloc-enabled').addEventListener('change', (event) => {
+    helocEnabled = Boolean(event.target.checked);
+    currentPage = 1;
+    computeScenarioRows();
+    updateFinancingSummary();
+    renderPriorityRanking();
+  });
+
+  document.getElementById('rows-per-page').addEventListener('change', (event) => {
+    rowsPerPage = Number(event.target.value || 50);
+    currentPage = 1;
+    renderPriorityRanking();
+  });
+  document.getElementById('city-filter').addEventListener('change', (event) => {
+    activeCityFilter = String(event.target.value || 'all').trim().toLowerCase();
+    currentPage = 1;
+    renderPriorityRanking();
+  });
+  document.getElementById('page-prev').addEventListener('click', () => {
+    if (currentPage > 1) {
+      currentPage -= 1;
+      renderPriorityRanking();
+    }
+  });
+  document.getElementById('page-next').addEventListener('click', () => {
+    currentPage += 1;
+    renderPriorityRanking();
+  });
+  document.querySelectorAll('.listings-table thead th[data-sort-key]').forEach((th) => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => {
+      const clickedKey = th.getAttribute('data-sort-key') || '';
+      if (!clickedKey) return;
+      if (activeSortKey === clickedKey) {
+        activeSortDirection = activeSortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        activeSortKey = clickedKey;
+        activeSortDirection = 'asc';
+      }
+      currentPage = 1;
+      renderSortIndicators();
+      renderPriorityRanking();
+    });
+  });
+  document.getElementById('ranking-list').addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const propertyId = String(target.dataset.propertyId || '');
+    if (!propertyId) return;
+    if (target.dataset.action === 'toggle') {
+      const row = scenarioRows.find((item) => String(item.property_id || '') === propertyId);
+      if (!row || !isPalmSpringsRow(row)) return;
+      const state = getConstraintState(row);
+      state.open = !state.open;
+      renderPriorityRanking();
+      return;
+    }
+    if (target.classList.contains('constraint-tier-btn')) {
+      const row = scenarioRows.find((item) => String(item.property_id || '') === propertyId);
+      if (!row) return;
+      const state = getConstraintState(row);
+      const tier = String(target.dataset.tier || 'average');
+      state.tier = tier === 'luxury' ? 'luxury' : 'average';
+      renderPriorityRanking();
+    }
+  });
+  document.getElementById('ranking-list').addEventListener('input', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (!(target instanceof HTMLInputElement)) return;
+    const propertyId = String(target.dataset.propertyId || '');
+    if (!propertyId) return;
+    const row = scenarioRows.find((item) => String(item.property_id || '') === propertyId);
+    if (!row) return;
+    const state = getConstraintState(row);
+    if (target.dataset.field === 'adr') {
+      state.adr = Math.max(0, Number(target.value || 0));
+      renderPriorityRanking();
+      return;
+    }
+    if (target.dataset.field === 'avg_stay') {
+      state.avgStay = Math.max(1, Number(target.value || 1));
+      renderPriorityRanking();
+    }
+  });
+  renderSortIndicators();
+  computeScenarioRows();
+  const cityFilter = document.getElementById('city-filter');
+  const uniqueCities = Array.from(
+    new Set(
+      scenarioRows
+        .map((row) => String(row.city || '').trim())
+        .filter((city) => city.length > 0)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+  uniqueCities.forEach((city) => {
+    const option = document.createElement('option');
+    option.value = city.toLowerCase();
+    option.textContent = city;
+    cityFilter.appendChild(option);
+  });
+  activeCityFilter = String(cityFilter.value || 'all').trim().toLowerCase();
+
+  updateFinancingSummary();
 
   const snapshot = document.getElementById('filter-snapshot');
+  const kpiFilterList = document.getElementById('str-filter-kpi-list');
   snapshot.innerHTML = '';
+  kpiFilterList.innerHTML = '';
   (payload.str_filter_snapshot || []).forEach((line) => {
     const item = document.createElement('li');
     item.textContent = line;
     snapshot.appendChild(item);
+    const kpiItem = document.createElement('li');
+    kpiItem.textContent = line;
+    kpiFilterList.appendChild(kpiItem);
   });
 
   renderPriorityRanking();
-  bindTableControls();
-  renderTable();
-  renderAssumptionsPanel();
 }
 
 init();
@@ -1386,11 +1815,18 @@ def main() -> None:
     args = parse_args()
     scored_df = load_scored_data(args.input)
     health_report = _load_incremental_health_report(args.health_report_input)
+    coc_assumptions = _load_coc_assumptions(args.assumptions_input)
+    full_scrape_completed_at: str | None = None
+    input_path = Path(args.input)
+    if input_path.exists():
+        full_scrape_completed_at = datetime.fromtimestamp(input_path.stat().st_mtime).astimezone().isoformat()
     payload = build_dashboard_payload(
         scored_df,
         top_n=args.top_n,
         homes_limit=args.homes_limit,
         health_report=health_report,
+        full_scrape_completed_at=full_scrape_completed_at,
+        coc_assumptions=coc_assumptions,
     )
     write_dashboard_html(payload, args.output)
     print(
