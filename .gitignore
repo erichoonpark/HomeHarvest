@@ -9,5 +9,6 @@
 .env.local
 .env.*
 !.env.example
+examples/data/firebase_web_config.json
 .venv/
 .DS_Store
