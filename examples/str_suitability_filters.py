@@ -228,6 +228,7 @@ def _normalize_assumptions(raw: dict[str, Any]) -> dict[str, Any]:
             "strict_neighborhood_match": False,
         }
     geography.setdefault("strict_neighborhood_match", False)
+    geography.setdefault("cap_enforced_cities", ["Palm Springs"])
 
     normalized_location = {
         "enabled": bool(location.get("enabled", True)),
@@ -572,6 +573,16 @@ def _compute_str_support(row: pd.Series, assumptions: dict[str, Any]) -> bool:
         return True
 
     geography = assumptions.get("geography", {})
+    cap_enforced_cities = {
+        _safe_str(city).strip().lower()
+        for city in geography.get("cap_enforced_cities", ["Palm Springs"])
+        if _safe_str(city).strip()
+    }
+    city_key = _safe_str(row.get("city")).strip().lower()
+    if cap_enforced_cities and city_key not in cap_enforced_cities:
+        # Non-cap-enforced cities are evaluated primarily by other hard gates.
+        return True
+
     strict_neighborhood_match = bool(geography.get("strict_neighborhood_match", False))
     fail_open_if_missing_cap_data = bool(geography.get("fail_open_if_missing_cap_data", True))
 
@@ -806,6 +817,15 @@ def _compute_geo_cap_zip(
     geography = assumptions.get("geography", {})
     if not geography.get("enabled", True):
         return True, "geography_disabled"
+
+    cap_enforced_cities = {
+        _safe_str(city).strip().lower()
+        for city in geography.get("cap_enforced_cities", ["Palm Springs"])
+        if _safe_str(city).strip()
+    }
+    city_key = _safe_str(row.get("city")).strip().lower()
+    if cap_enforced_cities and city_key not in cap_enforced_cities:
+        return True, "city_not_cap_constrained"
 
     zip_code = _normalize_zip(row.get("zip_code"))
     if not zip_code:

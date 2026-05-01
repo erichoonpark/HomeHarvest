@@ -15,8 +15,11 @@ DEFAULT_ASSUMPTIONS_PATH = Path("examples/data/coc_assumptions.json")
 BUDGET_LUXURY_MAX_PRICE = 1_500_000.0
 BUDGET_LUXURY_TOP_N = 30
 DASHBOARD_MAX_LIST_PRICE = 1_500_000.0
-EXCLUDED_PROPERTY_IDS = {"2310318356"}
-EXCLUDED_PROPERTY_SIGNATURES = {("1961 s palm canyon dr", "palm springs", "ca", "92264")}
+EXCLUDED_PROPERTY_IDS = {"2310318356", "2002934800"}
+EXCLUDED_PROPERTY_SIGNATURES = {
+    ("1961 s palm canyon dr", "palm springs", "ca", "92264"),
+    ("3467 savanna way", "palm springs", "ca", "92262"),
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,7 +112,10 @@ def _is_excluded_listing(row: pd.Series) -> bool:
         return True
 
     full_address = _normalize_text(row.get("address"))
-    return full_address == "1961 s palm canyon dr palm springs ca 92264"
+    return full_address in {
+        "1961 s palm canyon dr palm springs ca 92264",
+        "3467 savanna way palm springs ca 92262",
+    }
 
 
 def _ai_insights(row: pd.Series) -> dict[str, str]:
@@ -237,6 +243,9 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
         "beds": _safe_float(row.get("beds")),
         "full_baths": _safe_float(row.get("full_baths")),
         "scenario_tier": _safe_str(row.get("scenario_tier")),
+        "tier_auto": _safe_str(row.get("tier_auto")),
+        "tier_final": _safe_str(row.get("tier_final")),
+        "tier_source": _safe_str(row.get("tier_source"), "auto"),
         "monthly_debt_payment": _safe_float(row.get("monthly_debt_payment")),
         "annual_debt_service": _safe_float(row.get("annual_debt_service")),
         "total_cash_cost_to_buy": _safe_float(row.get("total_cash_cost_to_buy")),
@@ -245,9 +254,17 @@ def _row_to_home_payload(row: pd.Series) -> dict[str, Any]:
         "adr_low": _safe_float(row.get("adr_low")),
         "adr_med": _safe_float(row.get("adr_med")),
         "adr_high": _safe_float(row.get("adr_high")),
+        "adr_auto": _safe_float(row.get("adr_auto")),
+        "adr_final": _safe_float(row.get("adr_final"), _safe_float(row.get("adr_med"))),
+        "adr_source": _safe_str(row.get("adr_source"), "auto"),
         "occ_low": _safe_float(row.get("occupancy_low")),
         "occ_med": _safe_float(row.get("occupancy_med")),
         "occ_high": _safe_float(row.get("occupancy_high")),
+        "occupancy_auto": _safe_float(row.get("occupancy_auto")),
+        "occupancy_final": _safe_float(row.get("occupancy_final"), _safe_float(row.get("occupancy_med"))),
+        "occupancy_source": _safe_str(row.get("occupancy_source"), "auto"),
+        "override_last_updated_at": _safe_str(row.get("override_last_updated_at")),
+        "override_note": _safe_str(row.get("override_note")),
         "coc_low": _safe_float(row.get("coc_low")),
         "coc_med": _safe_float(row.get("coc_med")),
         "coc_high": _safe_float(row.get("coc_high")),
@@ -296,6 +313,15 @@ def _top_rows(df: pd.DataFrame, top_n: int) -> list[dict[str, Any]]:
                 "beds": _safe_float(row.get("beds")),
                 "full_baths": _safe_float(row.get("full_baths")),
                 "adr_med": _safe_float(row.get("adr_med")),
+                "adr_auto": _safe_float(row.get("adr_auto")),
+                "adr_final": _safe_float(row.get("adr_final"), _safe_float(row.get("adr_med"))),
+                "adr_source": _safe_str(row.get("adr_source"), "auto"),
+                "occupancy_auto": _safe_float(row.get("occupancy_auto")),
+                "occupancy_final": _safe_float(row.get("occupancy_final"), _safe_float(row.get("occupancy_med"))),
+                "occupancy_source": _safe_str(row.get("occupancy_source"), "auto"),
+                "tier_auto": _safe_str(row.get("tier_auto")),
+                "tier_final": _safe_str(row.get("tier_final"), _safe_str(row.get("scenario_tier"))),
+                "tier_source": _safe_str(row.get("tier_source"), "auto"),
                 "coc_med": _safe_float(row.get("coc_med")),
                 "coc_pre_tax": _safe_float(row.get("coc_pre_tax"), _safe_float(row.get("coc_med"))),
                 "coc_post_tax": _safe_float(row.get("coc_post_tax"), _safe_float(row.get("coc_med"))),
@@ -1221,6 +1247,10 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
 const payload = __PAYLOAD_JSON__;
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const pct = (v) => `${(Number(v || 0) * 100).toFixed(2)}%`;
+const sourceBadge = (source) => {
+  const isManual = String(source || '').toLowerCase() === 'manual';
+  return `<span class="constraint-badge">${isManual ? 'MANUAL' : 'AUTO'}</span>`;
+};
 let currentPage = 1;
 let rowsPerPage = 50;
 let sortedRows = [];
@@ -1343,7 +1373,7 @@ function constraintScenarioForRow(row, state) {
   const strNights = Math.min(annualNights, maxBookings * avgStay);
   const mtrNights = Math.max(0, annualNights - strNights);
 
-  const strOcc = Number(row.occ_med || 0);
+  const strOcc = Number(row.occupancy_final || row.occ_med || 0);
   const adr = Math.max(0, Number(state.adr || 0));
   const mtrAdrMultiplier = Number(mtrPolicy.mtr_adr_multiplier || 0.55);
   const mtrOcc = Number(mtrPolicy.mtr_occupancy || 0.72);
@@ -1433,8 +1463,9 @@ function sortRows(rows) {
 }
 
 function applyCityFilter(rows) {
-  if (activeCityFilter === 'all') return rows;
-  return rows.filter((row) => String(row?.city || '').trim().toLowerCase() === activeCityFilter);
+  const normalizedFilter = String(activeCityFilter || 'all').trim().toLowerCase();
+  if (normalizedFilter === 'all') return rows;
+  return rows.filter((row) => String(row?.city || '').trim().toLowerCase() === normalizedFilter);
 }
 
 function updateFinancingSummary() {
@@ -1508,8 +1539,8 @@ function renderPriorityRanking() {
       <td class="num">${pct(p.coc_pre_tax)}</td>
       <td class="num">${pct(p.coc_post_tax)}</td>
       <td class="num">${currency.format(Number(p.annual_cash_flow_med || 0))}</td>
-      <td class="num">${currency.format(Number(p.adr_med || 0))}</td>
-      <td class="num">${pct(p.occ_med)}</td>
+      <td class="num">${currency.format(Number(p.adr_final || p.adr_med || 0))} ${sourceBadge(p.adr_source)}</td>
+      <td class="num">${pct(p.occupancy_final || p.occ_med)} ${sourceBadge(p.occupancy_source)}</td>
       <td class="num">${currency.format(Number(p.total_cash_cost_to_buy || 0))}</td>
       <td class="num">${currency.format(Number(p.monthly_debt_payment || 0))}</td>
       <td class="num">${Number(p.str_fit_score || 0).toFixed(0)}</td>
@@ -1579,6 +1610,9 @@ function renderConstraintDetail(row, state) {
         </div>
         <div class="constraint-group">
           <h4>Constraint Math</h4>
+          <p class="constraint-formula"><span>Tier</span><strong>${String(row.tier_final || row.scenario_tier || 'n/a')} (${String(row.tier_source || 'auto').toUpperCase()})</strong></p>
+          <p class="constraint-formula"><span>ADR / OCC Baseline</span><strong>${currency.format(Number(row.adr_final || row.adr_med || 0))} / ${asPct(Number(row.occupancy_final || row.occ_med || 0))}</strong></p>
+          <p class="constraint-formula"><span>Override Note</span><strong>${String(row.override_note || '').trim() || 'n/a'}</strong></p>
           <p class="constraint-formula"><span>STR nights = min(365, 26 × avg_stay)</span><strong>${Math.round(scenario.strNights)} nights</strong></p>
           <p class="constraint-formula"><span>MTR nights = 365 - STR nights</span><strong>${Math.round(scenario.mtrNights)} nights</strong></p>
           <p class="constraint-formula"><span>STR/MTR split</span><strong>${asPct(scenario.strShare)} / ${asPct(scenario.mtrShare)}</strong></p>
@@ -1655,7 +1689,7 @@ function init() {
     renderPriorityRanking();
   });
   document.getElementById('city-filter').addEventListener('change', (event) => {
-    activeCityFilter = String(event.target.value || 'all');
+    activeCityFilter = String(event.target.value || 'all').trim().toLowerCase();
     currentPage = 1;
     renderPriorityRanking();
   });
@@ -1742,6 +1776,7 @@ function init() {
     option.textContent = city;
     cityFilter.appendChild(option);
   });
+  activeCityFilter = String(cityFilter.value || 'all').trim().toLowerCase();
 
   updateFinancingSummary();
 

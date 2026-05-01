@@ -119,7 +119,23 @@ def _sample_scored_df() -> pd.DataFrame:
 
 def test_build_dashboard_payload_has_widgets_data():
     module = _load_module()
-    payload = module.build_dashboard_payload(_sample_scored_df(), top_n=1, homes_limit=2)
+    payload = module.build_dashboard_payload(
+        _sample_scored_df(),
+        top_n=1,
+        homes_limit=2,
+        coc_assumptions={
+            "contract_policy": {
+                "annual_bookable_nights": 365,
+                "max_str_bookings_per_year": 26,
+                "avg_stay_nights_per_booking": 4,
+            },
+            "mtr": {"mtr_adr_multiplier": 0.55, "mtr_occupancy": 0.72},
+            "scenario_presets": {
+                "palm_springs_normal": {"med": {"adr": 430, "occupancy_rate": 0.62}},
+                "palm_springs_luxury": {"med": {"adr": 1250, "occupancy_rate": 0.58}},
+            },
+        },
+    )
 
     assert payload["total_ingested"] == 2
     assert payload["total_str_fit_passed"] == 1
@@ -158,6 +174,10 @@ def test_build_dashboard_payload_has_widgets_data():
     assert "total_luxury_value_budget_candidates" in payload
     assert "luxury_value_budget_cap" in payload
     assert "luxury_value_note" in payload
+    assert payload["contract_policy"]["max_str_bookings_per_year"] == 26
+    assert payload["mtr"]["mtr_adr_multiplier"] == 0.55
+    assert "average" in payload["tier_benchmarks"]
+    assert "luxury" in payload["tier_benchmarks"]
 
 
 def test_render_dashboard_html_contains_expected_sections():
@@ -211,7 +231,10 @@ def test_render_dashboard_html_contains_expected_sections():
     assert "computeScenarioRows()" in html
     assert "top5-potential-body" not in html
     assert "pool-watchlist-body" not in html
-    assert "home-select" not in html
+    assert "Palm Springs Constraints" in html
+    assert "Show Constraints" in html
+    assert "constraintScenarioForRow" in html
+    assert "Listing-Level" in html
     assert "Home Breakdown with ADR + Occupancy Sliders" not in html
     assert "Luxury STR Opportunities" not in html
     assert "payload" in html
@@ -723,3 +746,28 @@ def test_excluded_coownership_listing_is_hard_removed():
     assert "2310318356" not in top_ids
     assert "2310318356" not in priority_ids
     assert top_ids == ["SAFE1"]
+
+
+def test_dashboard_payload_exposes_override_provenance():
+    module = _load_module()
+    df = _sample_scored_df().copy()
+    df.loc[0, "tier_auto"] = "palm_springs_normal"
+    df.loc[0, "tier_final"] = "palm_springs_luxury"
+    df.loc[0, "tier_source"] = "manual"
+    df.loc[0, "adr_auto"] = 420
+    df.loc[0, "adr_final"] = 1600
+    df.loc[0, "adr_source"] = "manual"
+    df.loc[0, "occupancy_auto"] = 0.58
+    df.loc[0, "occupancy_final"] = 0.64
+    df.loc[0, "occupancy_source"] = "manual"
+    df.loc[0, "override_note"] = "manual uplift"
+
+    payload = module.build_dashboard_payload(df, top_n=2, homes_limit=2)
+    home = payload["homes"][0]
+    assert home["tier_source"] in {"auto", "manual"}
+    assert home["adr_source"] in {"auto", "manual"}
+    assert home["occupancy_source"] in {"auto", "manual"}
+    assert "adr_final" in home
+    assert "occupancy_final" in home
+    html = module.render_dashboard_html(payload)
+    assert "MANUAL" in html or "AUTO" in html
