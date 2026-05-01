@@ -217,7 +217,7 @@ def test_cap_zip_allowlist_derivation_and_reason(tmp_path: Path):
                 "property_id": "ZIP_FAIL",
                 "status": "FOR_SALE",
                 "street": "20 Cap St",
-                "city": "Indio",
+                "city": "Palm Springs",
                 "state": "CA",
                 "zip_code": "92201",
                 "list_price": 700000,
@@ -240,6 +240,39 @@ def test_cap_zip_allowlist_derivation_and_reason(tmp_path: Path):
     assert bool(zip_fail["eligible_geo_cap_zip"]) is False
     assert str(zip_fail["geo_cap_zip_reason"]) == "disallowed_all_at_or_above_cap"
     assert str(zip_fail["zip_cap_status"]) == "disallowed_all_at_or_above_cap"
+
+
+def test_non_cap_city_bypasses_cap_zip_gate(tmp_path: Path):
+    module = _load_module()
+    cap_workbook = tmp_path / "cap_by_zip.xlsx"
+    _write_cap_workbook(cap_workbook)
+    assumptions = _assumptions(cap_workbook)
+
+    df = pd.DataFrame(
+        [
+            {
+                "property_id": "INDIO_BYPASS",
+                "status": "FOR_SALE",
+                "street": "20 Cap St",
+                "city": "Indio",
+                "state": "CA",
+                "zip_code": "92201",
+                "list_price": 700000,
+                "beds": 3,
+                "full_baths": 2,
+                "sqft": 1700,
+                "str_nbhd_under_cap_current": 0,
+                "is_private_pool": True,
+                "is_private_pool_known": True,
+                "property_url": "https://example.com/indio-bypass",
+            },
+        ]
+    )
+    scored = module.evaluate_str_fit(df, assumptions)
+    row = scored.iloc[0]
+    assert bool(row["eligible_str_supported"]) is True
+    assert bool(row["eligible_geo_cap_zip"]) is True
+    assert str(row["geo_cap_zip_reason"]) == "city_not_cap_constrained"
 
 
 def test_shortlist_flags_land_in_target_band(tmp_path: Path):

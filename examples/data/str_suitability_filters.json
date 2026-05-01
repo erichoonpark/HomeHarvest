@@ -30,7 +30,8 @@
     "primary_zip_column": "primary_zip",
     "percentage_column": "current_neighborhood_percentage",
     "fail_open_if_missing_cap_data": false,
-    "strict_neighborhood_match": true
+    "strict_neighborhood_match": true,
+    "cap_enforced_cities": ["Palm Springs"]
   },
   "ranking_weights": {
     "quality": 30,
