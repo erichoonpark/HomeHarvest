@@ -36,19 +36,20 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "poetry==1.8.3"
-          poetry install --no-interaction --no-ansi --sync
-          poetry run pip install -e .
-          poetry run pip install openpyxl
+          python -m pip install "poetry==1.8.3"
+          python -m poetry --version
+          python -m poetry install --no-interaction --no-ansi --sync
+          python -m poetry run pip install -e .
+          python -m poetry run pip install openpyxl
 
       - name: Debug Poetry environment
         run: |
-          poetry env info
-          poetry run python -V
-          poetry run python -c "import sys; print('\n'.join(sys.path))"
+          python -m poetry env info
+          python -m poetry run python -V
+          python -m poetry run python -c "import sys; print('\n'.join(sys.path))"
 
       - name: Verify homeharvest import
-        run: poetry run python -c "import homeharvest; print(homeharvest.__file__)"
+        run: python -m poetry run python -c "import homeharvest; print(homeharvest.__file__)"
 
       - name: Run daily STR pipeline
         run: |
@@ -57,7 +58,7 @@ jobs:
           max_attempts=3
           until [ "$attempt" -gt "$max_attempts" ]; do
             echo "Daily STR pipeline attempt ${attempt}/${max_attempts}"
-            if poetry run python examples/daily_str_pipeline.py \
+            if python -m poetry run python examples/daily_str_pipeline.py \
               --mode incremental \
               --allow-empty-incremental \
               --health-report-output "$HEALTH_REPORT_PATH"; then
@@ -286,7 +287,7 @@ jobs:
           fi
 
       - name: Commit and push daily updates to master
-        if: steps.detect_changes.outputs.changed == 'true'
+        if: steps.detect_changes.outputs.changed == 'true' && github.ref == 'refs/heads/master'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"

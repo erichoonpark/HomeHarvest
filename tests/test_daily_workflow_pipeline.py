@@ -33,6 +33,11 @@ def test_daily_workflow_runs_full_pipeline_and_tracks_outputs():
     assert "timeout-minutes: 45" in text
     assert "issues: write" in text
     assert 'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in text
+    assert 'if: steps.detect_changes.outputs.changed == \'true\' && github.ref == \'refs/heads/master\'' in text
+    assert 'python -m pip install "poetry==1.8.3"' in text
+    assert "python -m poetry --version" in text
+    assert "python -m poetry env info" in text
+    assert "python -m poetry run python examples/daily_str_pipeline.py" in text
     assert '--health-report-output "$HEALTH_REPORT_PATH"' in text
     assert "Upload incremental health report" in text
     assert "Publish incremental scrape summary" in text
