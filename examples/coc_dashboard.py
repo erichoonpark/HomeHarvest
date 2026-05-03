@@ -12,6 +12,7 @@ DEFAULT_INPUT_PATH = Path("examples/zips/coc_scorecard.xlsx")
 DEFAULT_OUTPUT_PATH = Path("examples/zips/coc_dashboard.html")
 DEFAULT_HEALTH_REPORT_PATH = Path("examples/zips/incremental_health_report.json")
 DEFAULT_ASSUMPTIONS_PATH = Path("examples/data/coc_assumptions.json")
+DEFAULT_FIREBASE_CONFIG_PATH = Path("examples/data/firebase_web_config.json")
 BUDGET_LUXURY_MAX_PRICE = 1_500_000.0
 BUDGET_LUXURY_TOP_N = 30
 DASHBOARD_MAX_LIST_PRICE = 1_500_000.0
@@ -42,6 +43,11 @@ def parse_args() -> argparse.Namespace:
         "--assumptions-input",
         default=str(DEFAULT_ASSUMPTIONS_PATH),
         help="COC assumptions JSON used for Palm Springs constraint and tier benchmark metadata.",
+    )
+    parser.add_argument(
+        "--firebase-config-input",
+        default=str(DEFAULT_FIREBASE_CONFIG_PATH),
+        help="Optional Firebase web config JSON for collaboration features.",
     )
     return parser.parse_args()
 
@@ -530,6 +536,19 @@ def _load_coc_assumptions(path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def _load_firebase_config(path: str | Path) -> dict[str, Any]:
+    config_path = Path(path)
+    if not config_path.exists():
+        return {}
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
 def build_dashboard_payload(
     scored_df: pd.DataFrame,
     *,
@@ -538,6 +557,7 @@ def build_dashboard_payload(
     health_report: dict[str, Any] | None = None,
     full_scrape_completed_at: str | None = None,
     coc_assumptions: dict[str, Any] | None = None,
+    firebase_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scored = scored_df.copy()
     if not scored.empty:
@@ -615,6 +635,8 @@ def build_dashboard_payload(
         health_report = {}
     if coc_assumptions is None:
         coc_assumptions = {}
+    if firebase_config is None:
+        firebase_config = {}
     summary = health_report.get("summary")
     if not isinstance(summary, dict):
         summary = {}
@@ -683,6 +705,7 @@ def build_dashboard_payload(
             "mtr_occupancy": _safe_float(mtr.get("mtr_occupancy"), 0.72),
         },
         "tier_benchmarks": tier_benchmarks,
+        "firebase": firebase_config,
     }
 
 
@@ -876,6 +899,38 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       justify-content: space-between;
       gap: 8px;
     }
+    .auth-panel {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: #f8fbff;
+    }
+    .auth-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .auth-panel input[type="email"] {
+      min-width: 240px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+    .auth-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .auth-status {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
     .constraint-panel {
       border: 1px solid #c7d2fe;
       border-radius: 10px;
@@ -980,6 +1035,43 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       padding: 5px 8px;
       cursor: pointer;
       white-space: nowrap;
+    }
+    .collab-box {
+      margin-top: 10px;
+      border-top: 1px dashed #cbd5e1;
+      padding-top: 10px;
+    }
+    .collab-box h5 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: #334155;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .collab-box textarea {
+      width: 100%;
+      min-height: 70px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+      resize: vertical;
+      background: #fff;
+    }
+    .collab-actions {
+      margin-top: 6px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .shared-notes-list {
+      margin: 6px 0 0;
+      padding-left: 16px;
+      font-size: 12px;
+      color: #334155;
+    }
+    .shared-notes-list li {
+      margin-bottom: 4px;
     }
     .constraint-note {
       font-size: 11px;
@@ -1153,6 +1245,17 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
         <div class="overview-summary">
           <h2>Listings Overview</h2>
           <p id="priority-note" class="module-note"></p>
+          <div class="auth-panel">
+            <div class="auth-row">
+              <strong>Team Collaboration</strong>
+              <div class="auth-actions">
+                <input id="auth-email-input" type="email" placeholder="you@company.com" />
+                <button id="auth-send-link" type="button">Send Sign-In Link</button>
+                <button id="auth-sign-out" type="button">Sign Out</button>
+              </div>
+            </div>
+            <p id="auth-status" class="auth-status">Firebase collaboration is disabled until config is provided.</p>
+          </div>
           <div class="snapshot">
             <strong>STR Filter Snapshot</strong><span class="chip">Palm Springs • Bermuda Dunes • Indio</span>
             <ul id="filter-snapshot"></ul>
@@ -1243,6 +1346,9 @@ def render_dashboard_html(payload: dict[str, Any]) -> str:
       <div id="priority-empty" class="empty"></div>
     </section>
   </div>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
 const payload = __PAYLOAD_JSON__;
 const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -1269,6 +1375,14 @@ let activeMortgageMode = 'second_home';
 let helocEnabled = true;
 let scenarioRows = [];
 const rowConstraintState = {};
+const rowCollabState = {};
+const unsubscribersByProperty = {};
+let firebaseReady = false;
+let authReady = false;
+let currentUser = null;
+let firestore = null;
+let auth = null;
+let preferenceSaveTimer = null;
 const pullTimestampFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Los_Angeles',
   year: 'numeric',
@@ -1306,6 +1420,67 @@ function formatInt(value) {
 
 function asPct(value) {
   return `${(Number(value || 0) * 100).toFixed(2)}%`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function toSafeHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''), window.location.origin);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.href;
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+function formatErrorMessage(err) {
+  if (err && typeof err === 'object' && 'message' in err) return String(err.message || err);
+  return String(err || 'unknown error');
+}
+
+function setActionError(prefix, err) {
+  setAuthStatus(`${prefix}: ${formatErrorMessage(err)}`);
+}
+
+function setAuthStatus(message) {
+  const node = document.getElementById('auth-status');
+  if (node) node.textContent = message;
+}
+
+function getCollabState(propertyId) {
+  const key = String(propertyId || '');
+  if (!rowCollabState[key]) {
+    rowCollabState[key] = {
+      sharedNotes: [],
+      personalNote: '',
+      loading: false,
+    };
+  }
+  return rowCollabState[key];
+}
+
+function findScenarioRow(propertyId) {
+  const key = String(propertyId || '');
+  return scenarioRows.find((item) => String(item.property_id || '') === key) || null;
+}
+
+function formatFirestoreTimestamp(ts) {
+  if (!ts) return '';
+  try {
+    const d = ts.toDate ? ts.toDate() : new Date(ts);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleString();
+  } catch {
+    return '';
+  }
 }
 
 function toTierView(scenarioTier) {
@@ -1468,11 +1643,192 @@ function applyCityFilter(rows) {
   return rows.filter((row) => String(row?.city || '').trim().toLowerCase() === normalizedFilter);
 }
 
+async function writeAuditLog(action, entityType, entityId, beforeValue, afterValue) {
+  if (!firebaseReady || !currentUser || !firestore) return;
+  await firestore.collection('auditLogs').add({
+    action,
+    entityType,
+    entityId: String(entityId || ''),
+    actorUid: currentUser.uid,
+    actorEmail: currentUser.email || '',
+    before: beforeValue ?? null,
+    after: afterValue ?? null,
+    timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+async function savePreference(key, value) {
+  if (!firebaseReady || !currentUser || !firestore) return;
+  await firestore.doc(`users/${currentUser.uid}/preferences/dashboard`).set(
+    {
+      [key]: value,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+  await writeAuditLog('savePreference', 'dashboardPreference', key, null, value);
+}
+
+function schedulePreferenceSave() {
+  if (preferenceSaveTimer) clearTimeout(preferenceSaveTimer);
+  preferenceSaveTimer = setTimeout(async () => {
+    if (!firebaseReady || !currentUser) return;
+    await savePreference('cityFilter', activeCityFilter);
+    await savePreference('rowsPerPage', rowsPerPage);
+    await savePreference('sortKey', activeSortKey);
+    await savePreference('sortDirection', activeSortDirection);
+  }, 250);
+}
+
+async function loadPreferencesForUser() {
+  if (!firebaseReady || !currentUser || !firestore) return;
+  const doc = await firestore.doc(`users/${currentUser.uid}/preferences/dashboard`).get();
+  if (!doc.exists) return;
+  const data = doc.data() || {};
+  if (typeof data.rowsPerPage === 'number' && data.rowsPerPage > 0) {
+    rowsPerPage = data.rowsPerPage;
+    document.getElementById('rows-per-page').value = String(data.rowsPerPage);
+  }
+  if (typeof data.cityFilter === 'string') {
+    activeCityFilter = data.cityFilter;
+    const cityFilter = document.getElementById('city-filter');
+    if (cityFilter.querySelector(`option[value="${activeCityFilter}"]`)) {
+      cityFilter.value = activeCityFilter;
+    }
+  }
+  if (typeof data.sortKey === 'string') activeSortKey = data.sortKey;
+  if (typeof data.sortDirection === 'string') activeSortDirection = data.sortDirection;
+}
+
+function unsubscribeCollab(propertyId) {
+  const key = String(propertyId || '');
+  const unsub = unsubscribersByProperty[key];
+  if (!unsub) return;
+  unsub.forEach((fn) => {
+    try { fn(); } catch {}
+  });
+  delete unsubscribersByProperty[key];
+}
+
+function ensureCollabSubscriptions(propertyId) {
+  if (!firebaseReady || !authReady || !currentUser || !firestore) return;
+  const key = String(propertyId || '');
+  if (unsubscribersByProperty[key]) return;
+  const collab = getCollabState(key);
+  collab.loading = true;
+  const noteCollection = firestore
+    .collection(`properties/${key}/sharedNotes`)
+    .orderBy('updatedAt', 'desc')
+    .limit(20);
+  const unsubs = [];
+  unsubs.push(
+    noteCollection.onSnapshot((snapshot) => {
+      collab.sharedNotes = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+      collab.loading = false;
+      renderPriorityRanking();
+    })
+  );
+  unsubs.push(
+    firestore.doc(`users/${currentUser.uid}/propertyNotes/${key}`).onSnapshot((doc) => {
+      const data = doc.exists ? (doc.data() || {}) : {};
+      collab.personalNote = String(data.body || '');
+      renderPriorityRanking();
+    })
+  );
+  unsubscribersByProperty[key] = unsubs;
+}
+
+async function saveSharedNote(propertyId, body) {
+  if (!firebaseReady || !currentUser || !firestore) return;
+  const cleanBody = String(body || '').trim();
+  if (!cleanBody) return;
+  await firestore.collection(`properties/${propertyId}/sharedNotes`).add({
+    body: cleanBody,
+    authorUid: currentUser.uid,
+    authorEmail: currentUser.email || '',
+    status: 'active',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+  await writeAuditLog('saveSharedNote', 'sharedNote', propertyId, null, cleanBody);
+}
+
+async function savePersonalNote(propertyId, body) {
+  if (!firebaseReady || !currentUser || !firestore) return;
+  const cleanBody = String(body || '').trim();
+  const ref = firestore.doc(`users/${currentUser.uid}/propertyNotes/${propertyId}`);
+  const beforeSnap = await ref.get();
+  const before = beforeSnap.exists ? String((beforeSnap.data() || {}).body || '') : null;
+  await ref.set(
+    {
+      body: cleanBody,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      propertyId: String(propertyId || ''),
+    },
+    { merge: true }
+  );
+  await writeAuditLog('savePersonalNote', 'personalNote', propertyId, before, cleanBody);
+}
+
+function buildEmailLinkSettings() {
+  const url = `${window.location.origin}${window.location.pathname}`;
+  return { url, handleCodeInApp: true };
+}
+
+async function initFirebaseCollab() {
+  const cfg = payload.firebase || {};
+  const firebaseCfg = cfg.firebase || cfg;
+  const required = ['apiKey', 'authDomain', 'projectId', 'appId'];
+  const hasConfig = required.every((k) => typeof firebaseCfg[k] === 'string' && firebaseCfg[k].trim().length > 0);
+  if (!hasConfig || typeof firebase === 'undefined') {
+    setAuthStatus('Firebase collaboration is disabled until config is provided.');
+    return;
+  }
+  firebase.initializeApp(firebaseCfg);
+  auth = firebase.auth();
+  firestore = firebase.firestore();
+  firebaseReady = true;
+
+  if (auth.isSignInWithEmailLink(window.location.href)) {
+    const storedEmail = window.localStorage.getItem('firebaseEmailForSignIn') || '';
+    if (storedEmail) {
+      try {
+        await auth.signInWithEmailLink(storedEmail, window.location.href);
+        window.localStorage.removeItem('firebaseEmailForSignIn');
+        setAuthStatus(`Signed in as ${storedEmail}`);
+      } catch (err) {
+        setActionError('Email link sign-in failed', err);
+      }
+    }
+  }
+
+  auth.onAuthStateChanged(async (user) => {
+    authReady = true;
+    currentUser = user;
+    if (!user) {
+      setAuthStatus('Signed out. Use email link sign-in to collaborate.');
+      Object.keys(unsubscribersByProperty).forEach((propertyId) => unsubscribeCollab(propertyId));
+      return;
+    }
+    setAuthStatus(`Signed in as ${user.email || user.uid}`);
+    await loadPreferencesForUser();
+    renderSortIndicators();
+    renderPriorityRanking();
+  });
+}
+
 function updateFinancingSummary() {
   const loan = financingConfig[activeMortgageMode] || financingConfig.second_home;
   document.getElementById('active-rate').textContent = loan.labelRate;
   document.getElementById('active-down').textContent = loan.labelDown;
   document.getElementById('active-heloc').textContent = helocEnabled ? 'On' : 'Off';
+}
+
+function recomputeAndRenderRows() {
+  currentPage = 1;
+  computeScenarioRows();
+  updateFinancingSummary();
+  renderPriorityRanking();
 }
 
 function renderSortIndicators() {
@@ -1519,9 +1875,11 @@ function renderPriorityRanking() {
     const isPs = isPalmSpringsRow(p);
     const tr = document.createElement('tr');
     const rank = start + idx + 1;
-    const addressCell = p.property_url
-      ? `<a class="link" href="${p.property_url}">${p.address || 'n/a'}</a>`
-      : (p.address || 'n/a');
+    const safeAddress = escapeHtml(p.address || 'n/a');
+    const safePropertyUrl = toSafeHttpUrl(p.property_url);
+    const addressCell = safePropertyUrl
+      ? `<a class="link" href="${safePropertyUrl}">${safeAddress}</a>`
+      : safeAddress;
     const constraintCell = isPs
       ? `<button type="button" class="constraint-toggle-btn" data-property-id="${p.property_id}" data-action="toggle">${state.open ? 'Hide Constraints' : 'Show Constraints'}</button>`
       : '<span class="constraint-note"></span>';
@@ -1549,9 +1907,12 @@ function renderPriorityRanking() {
     container.appendChild(tr);
 
     if (isPs && state.open) {
+      ensureCollabSubscriptions(p.property_id || '');
       const detailTr = document.createElement('tr');
       detailTr.innerHTML = `<td colspan="19">${renderConstraintDetail(p, state)}</td>`;
       container.appendChild(detailTr);
+    } else if (isPs && !state.open) {
+      unsubscribeCollab(p.property_id || '');
     }
   });
 
@@ -1584,6 +1945,10 @@ function renderConstraintDetail(row, state) {
   const postDelta = scenario.postTaxCoc - scenario.baselinePostTaxCoc;
   const cashDelta = scenario.annualCashFlow - scenario.baselineAnnualCashFlow;
   const propertyId = String(row.property_id || '');
+  const collab = getCollabState(propertyId);
+  const sharedNotesHtml = collab.sharedNotes.length
+    ? collab.sharedNotes.map((n) => `<li><strong>${escapeHtml(n.authorEmail || 'anon')}</strong>: ${escapeHtml(n.body || '')} <span class="finance-hint">(${escapeHtml(formatFirestoreTimestamp(n.updatedAt || n.createdAt))})</span></li>`).join('')
+    : '<li class="finance-hint">No shared notes yet.</li>';
   return `
     <div class="constraint-panel">
       <div class="constraint-grid">
@@ -1645,6 +2010,21 @@ function renderConstraintDetail(row, state) {
           </article>
         </div>
       </div>
+      <div class="constraint-group collab-box">
+        <h5>Shared Notes (Team)</h5>
+        <ul class="shared-notes-list">${sharedNotesHtml}</ul>
+        <textarea id="shared-note-input-${propertyId}" placeholder="Add shared underwriting note..."></textarea>
+        <div class="collab-actions">
+          <button type="button" class="constraint-toggle-btn" data-action="save-shared-note" data-property-id="${propertyId}">Save Shared Note</button>
+        </div>
+      </div>
+      <div class="constraint-group collab-box">
+        <h5>My Personal Note</h5>
+        <textarea id="personal-note-input-${propertyId}" placeholder="Private note for your own workflow...">${escapeHtml(collab.personalNote || '')}</textarea>
+        <div class="collab-actions">
+          <button type="button" class="constraint-toggle-btn" data-action="save-personal-note" data-property-id="${propertyId}">Save Personal Note</button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -1663,35 +2043,28 @@ function init() {
 
   document.getElementById('mortgage-second-home').addEventListener('change', () => {
     activeMortgageMode = 'second_home';
-    currentPage = 1;
-    computeScenarioRows();
-    updateFinancingSummary();
-    renderPriorityRanking();
+    recomputeAndRenderRows();
   });
   document.getElementById('mortgage-investment').addEventListener('change', () => {
     activeMortgageMode = 'investment_home';
-    currentPage = 1;
-    computeScenarioRows();
-    updateFinancingSummary();
-    renderPriorityRanking();
+    recomputeAndRenderRows();
   });
   document.getElementById('heloc-enabled').addEventListener('change', (event) => {
     helocEnabled = Boolean(event.target.checked);
-    currentPage = 1;
-    computeScenarioRows();
-    updateFinancingSummary();
-    renderPriorityRanking();
+    recomputeAndRenderRows();
   });
 
   document.getElementById('rows-per-page').addEventListener('change', (event) => {
     rowsPerPage = Number(event.target.value || 50);
     currentPage = 1;
     renderPriorityRanking();
+    schedulePreferenceSave();
   });
   document.getElementById('city-filter').addEventListener('change', (event) => {
     activeCityFilter = String(event.target.value || 'all').trim().toLowerCase();
     currentPage = 1;
     renderPriorityRanking();
+    schedulePreferenceSave();
   });
   document.getElementById('page-prev').addEventListener('click', () => {
     if (currentPage > 1) {
@@ -1717,7 +2090,30 @@ function init() {
       currentPage = 1;
       renderSortIndicators();
       renderPriorityRanking();
+      schedulePreferenceSave();
     });
+  });
+  document.getElementById('auth-send-link').addEventListener('click', async () => {
+    if (!firebaseReady || !auth) {
+      setAuthStatus('Firebase not configured.');
+      return;
+    }
+    const email = String(document.getElementById('auth-email-input').value || '').trim();
+    if (!email) {
+      setAuthStatus('Enter an email first.');
+      return;
+    }
+    try {
+      await auth.sendSignInLinkToEmail(email, buildEmailLinkSettings());
+      window.localStorage.setItem('firebaseEmailForSignIn', email);
+      setAuthStatus(`Sign-in link sent to ${email}`);
+    } catch (err) {
+      setActionError('Failed sending sign-in link', err);
+    }
+  });
+  document.getElementById('auth-sign-out').addEventListener('click', async () => {
+    if (!firebaseReady || !auth) return;
+    await auth.signOut();
   });
   document.getElementById('ranking-list').addEventListener('click', (event) => {
     const target = event.target;
@@ -1725,15 +2121,33 @@ function init() {
     const propertyId = String(target.dataset.propertyId || '');
     if (!propertyId) return;
     if (target.dataset.action === 'toggle') {
-      const row = scenarioRows.find((item) => String(item.property_id || '') === propertyId);
+      const row = findScenarioRow(propertyId);
       if (!row || !isPalmSpringsRow(row)) return;
       const state = getConstraintState(row);
       state.open = !state.open;
       renderPriorityRanking();
       return;
     }
+    if (target.dataset.action === 'save-shared-note') {
+      const input = document.getElementById(`shared-note-input-${propertyId}`);
+      if (input instanceof HTMLTextAreaElement) {
+        saveSharedNote(propertyId, input.value)
+          .then(() => { input.value = ''; })
+          .catch((err) => setActionError('Save shared note failed', err));
+      }
+      return;
+    }
+    if (target.dataset.action === 'save-personal-note') {
+      const input = document.getElementById(`personal-note-input-${propertyId}`);
+      if (input instanceof HTMLTextAreaElement) {
+        savePersonalNote(propertyId, input.value)
+          .then(() => setAuthStatus('Personal note saved.'))
+          .catch((err) => setActionError('Save personal note failed', err));
+      }
+      return;
+    }
     if (target.classList.contains('constraint-tier-btn')) {
-      const row = scenarioRows.find((item) => String(item.property_id || '') === propertyId);
+      const row = findScenarioRow(propertyId);
       if (!row) return;
       const state = getConstraintState(row);
       const tier = String(target.dataset.tier || 'average');
@@ -1747,7 +2161,7 @@ function init() {
     if (!(target instanceof HTMLInputElement)) return;
     const propertyId = String(target.dataset.propertyId || '');
     if (!propertyId) return;
-    const row = scenarioRows.find((item) => String(item.property_id || '') === propertyId);
+    const row = findScenarioRow(propertyId);
     if (!row) return;
     const state = getConstraintState(row);
     if (target.dataset.field === 'adr') {
@@ -1779,6 +2193,7 @@ function init() {
   activeCityFilter = String(cityFilter.value || 'all').trim().toLowerCase();
 
   updateFinancingSummary();
+  initFirebaseCollab();
 
   const snapshot = document.getElementById('filter-snapshot');
   const kpiFilterList = document.getElementById('str-filter-kpi-list');
@@ -1816,6 +2231,7 @@ def main() -> None:
     scored_df = load_scored_data(args.input)
     health_report = _load_incremental_health_report(args.health_report_input)
     coc_assumptions = _load_coc_assumptions(args.assumptions_input)
+    firebase_config = _load_firebase_config(args.firebase_config_input)
     full_scrape_completed_at: str | None = None
     input_path = Path(args.input)
     if input_path.exists():
@@ -1827,6 +2243,7 @@ def main() -> None:
         health_report=health_report,
         full_scrape_completed_at=full_scrape_completed_at,
         coc_assumptions=coc_assumptions,
+        firebase_config=firebase_config,
     )
     write_dashboard_html(payload, args.output)
     print(

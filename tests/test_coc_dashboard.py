@@ -771,3 +771,55 @@ def test_dashboard_payload_exposes_override_provenance():
     assert "occupancy_final" in home
     html = module.render_dashboard_html(payload)
     assert "MANUAL" in html or "AUTO" in html
+
+
+def test_load_firebase_config_handles_missing_invalid_and_valid(tmp_path: Path):
+    module = _load_module()
+    missing = tmp_path / "missing.json"
+    assert module._load_firebase_config(missing) == {}
+
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not-json", encoding="utf-8")
+    assert module._load_firebase_config(bad) == {}
+
+    valid = tmp_path / "ok.json"
+    valid.write_text(
+        json.dumps(
+            {
+                "firebase": {
+                    "apiKey": "abc",
+                    "authDomain": "homeharvest.firebaseapp.com",
+                    "projectId": "homeharvest",
+                    "appId": "1:123:web:456",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = module._load_firebase_config(valid)
+    assert loaded["firebase"]["projectId"] == "homeharvest"
+
+
+def test_build_dashboard_payload_defaults_firebase_to_empty_dict():
+    module = _load_module()
+    payload = module.build_dashboard_payload(_sample_scored_df(), top_n=1, homes_limit=1)
+    assert payload["firebase"] == {}
+
+
+def test_render_dashboard_html_contains_firebase_collab_bootstrap():
+    module = _load_module()
+    payload = module.build_dashboard_payload(_sample_scored_df(), top_n=2, homes_limit=2)
+    html = module.render_dashboard_html(payload)
+
+    assert "Firebase collaboration is disabled until config is provided." in html
+    assert 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js' in html
+    assert 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js' in html
+    assert 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js' in html
+    assert "function escapeHtml(value)" in html
+    assert "function toSafeHttpUrl(value)" in html
+    assert "function formatErrorMessage(err)" in html
+    assert "function setActionError(prefix, err)" in html
+    assert "function findScenarioRow(propertyId)" in html
+    assert "function recomputeAndRenderRows()" in html
+    assert "const safeAddress = escapeHtml(p.address || 'n/a');" in html
+    assert "const safePropertyUrl = toSafeHttpUrl(p.property_url);" in html
