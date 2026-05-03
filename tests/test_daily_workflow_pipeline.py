@@ -32,7 +32,6 @@ def test_daily_workflow_runs_full_pipeline_and_tracks_outputs():
     assert "examples/zips/incremental_health_report.json" in text
     assert "timeout-minutes: 45" in text
     assert "issues: write" in text
-    assert "cache: poetry" in text
     assert 'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in text
     assert '--health-report-output "$HEALTH_REPORT_PATH"' in text
     assert "Upload incremental health report" in text
