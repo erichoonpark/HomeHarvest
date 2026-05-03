@@ -1,10 +1,10 @@
 """
-Scrape STR-oriented Palm Springs/Indio/Bermuda Dunes ZIP codes for single-family homes.
+Scrape STR-oriented Palm Springs/Indio/Bermuda Dunes listings for single-family homes.
 
 Modes:
 - incremental (default): fetch previous-day window, append only new property_id rows
   into combined outputs.
-- full: refresh per-ZIP exports and rebuild combined outputs.
+- full: refresh per-scope exports and rebuild combined outputs.
 """
 
 from __future__ import annotations
@@ -29,15 +29,13 @@ STR_SCOPE_CITIES = (
     "Indio",
 )
 
-STR_FRIENDLY_ZIP_CODES = [
-    "92258",  # North Palm Springs (Palm Springs)
-    "92262",
-    "92263",
-    "92264",
-    "92201",  # Indio
-    "92202",  # Indio
-    "92203",  # Indio / Bermuda Dunes postal area
-]
+# Wide-first ingestion scope: scrape by city-level locations, then narrow in
+# downstream filtering layers.
+INGEST_SCOPE_LOCATIONS = (
+    "Palm Springs, CA",
+    "Bermuda Dunes, CA",
+    "Indio, CA",
+)
 STR_SCOPE_CITY_KEYS = {city.strip().lower() for city in STR_SCOPE_CITIES}
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -119,6 +117,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export STR-oriented HomeHarvest datasets")
     parser.add_argument("--mode", choices=["incremental", "full"], default="incremental")
     parser.add_argument(
+        "--ingest-location",
+        action="append",
+        dest="ingest_locations",
+        help=(
+            "Optional ingestion location query. Repeat for multiple values. "
+            "Defaults to the wide city scope: Palm Springs, Bermuda Dunes, and Indio."
+        ),
+    )
+    parser.add_argument(
         "--run-date",
         help="Anchor date (YYYY-MM-DD) used for default incremental window. Default is local today.",
     )
@@ -140,6 +147,29 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to write incremental health report JSON.",
     )
     return parser.parse_args()
+
+
+def _resolve_ingest_locations(args: argparse.Namespace) -> tuple[str, ...]:
+    _validate_ingest_scope_alignment()
+    override = getattr(args, "ingest_locations", None)
+    if not override:
+        return INGEST_SCOPE_LOCATIONS
+    normalized = tuple(str(value).strip() for value in override if str(value).strip())
+    return normalized if normalized else INGEST_SCOPE_LOCATIONS
+
+
+def _validate_ingest_scope_alignment() -> None:
+    scope_cities = tuple(str(city).strip() for city in STR_SCOPE_CITIES if str(city).strip())
+    location_cities = tuple(
+        str(location).split(",", 1)[0].strip() for location in INGEST_SCOPE_LOCATIONS if str(location).strip()
+    )
+    scope_city_keys = {city.lower() for city in scope_cities}
+    location_city_keys = {city.lower() for city in location_cities}
+    if len(scope_cities) != len(location_cities) or scope_city_keys != location_city_keys:
+        raise RuntimeError(
+            "Ingestion scope constants are out of sync. "
+            f"STR_SCOPE_CITIES={scope_cities}, INGEST_SCOPE_LOCATIONS={INGEST_SCOPE_LOCATIONS}."
+        )
 
 
 def _normalize_property_id(value: object) -> str:
@@ -510,7 +540,12 @@ def _extract_pool_mapping(row: pd.Series) -> dict[str, object]:
     }
 
 
-def enrich_and_enforce_required_baseline_fields(df: pd.DataFrame, *, zip_code: str, listing_type: str) -> pd.DataFrame:
+def enrich_and_enforce_required_baseline_fields(
+    df: pd.DataFrame,
+    *,
+    scope_label: str,
+    listing_type: str,
+) -> pd.DataFrame:
     if df.empty:
         return df
 
@@ -561,18 +596,18 @@ def enrich_and_enforce_required_baseline_fields(df: pd.DataFrame, *, zip_code: s
     pool_conflict = int(kept["pool_conflict"].sum()) if not kept.empty else 0
     if dropped > 0:
         print(
-            f"[baseline-required] ZIP {zip_code} {listing_type}: dropped {dropped}/{len(enriched)} rows "
+            f"[baseline-required] scope {scope_label} {listing_type}: dropped {dropped}/{len(enriched)} rows "
             "missing required baseline fields (price, sqft, address, url, lot_size, type)."
         )
     print(
-        f"[baseline-required] ZIP {zip_code} {listing_type}: kept {len(kept)} rows; "
+        f"[baseline-required] scope {scope_label} {listing_type}: kept {len(kept)} rows; "
         f"pool_detected={pool_detected}; private_pool_true={private_true}; "
         f"private_pool_unknown={len(kept) - private_known}; private_pool_verified={private_verified}; "
         f"community_only={community_only}; conflict={pool_conflict}."
     )
     if (kept.get("pool_signal_sources", pd.Series(dtype="object")) == "none").any():
         print(
-            f"[baseline-required] ZIP {zip_code} {listing_type}: warning -> some rows have no pool signals in "
+            f"[baseline-required] scope {scope_label} {listing_type}: warning -> some rows have no pool signals in "
             "details/tags/photo-tags or fallback text; private-pool remains unknown."
         )
 
@@ -642,15 +677,16 @@ def resolve_window_from_args(args: argparse.Namespace) -> tuple[datetime, dateti
 
 
 def get_property_details(
-    zip_code: str,
+    location_query: str,
     listing_type: str,
     *,
     past_days: Optional[int] = 365,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
+    scope_label: str | None = None,
 ) -> pd.DataFrame:
     scrape_kwargs: dict[str, object] = {
-        "location": zip_code,
+        "location": location_query,
         "listing_type": listing_type,
         "property_type": HOME_PROPERTY_TYPES,
     }
@@ -720,7 +756,7 @@ def get_property_details(
     )
     required_baseline_rows = enrich_and_enforce_required_baseline_fields(
         filtered,
-        zip_code=zip_code,
+        scope_label=scope_label or location_query,
         listing_type=listing_type,
     )
     return _apply_str_scope_city_gate(required_baseline_rows)
@@ -919,11 +955,12 @@ def apply_incremental_upserts(
     return combined_df, new_rows_df, status_updated_rows, refreshed_same_status_rows, unchanged_overlap_rows
 
 
-def output_zip_folder(zip_code: str, frames: dict[str, pd.DataFrame]) -> None:
-    zip_folder = OUTPUT_DIR / zip_code
-    zip_folder.mkdir(parents=True, exist_ok=True)
+def output_scope_folder(scope: str, frames: dict[str, pd.DataFrame]) -> None:
+    scope_slug = re.sub(r"[^a-z0-9]+", "_", scope.strip().lower()).strip("_")
+    scope_folder = OUTPUT_DIR / scope_slug
+    scope_folder.mkdir(parents=True, exist_ok=True)
     for name, df in frames.items():
-        base = zip_folder / f"{zip_code}_{name}"
+        base = scope_folder / f"{scope_slug}_{name}"
         df.to_csv(f"{base}.csv", index=False)
         df.to_excel(f"{base}.xlsx", index=False)
 
@@ -939,7 +976,7 @@ def normalize_combined_export_columns(df: pd.DataFrame) -> pd.DataFrame:
 def _build_incremental_health_report(
     *,
     summary: dict[str, int],
-    zip_results: list[dict[str, object]],
+    scope_results: list[dict[str, object]],
     window_start: datetime,
     window_end: datetime,
     batch_run_at: str,
@@ -957,7 +994,9 @@ def _build_incremental_health_report(
         "allow_empty_incremental": bool(allow_empty_incremental),
         "summary": summary,
         "combined_total_rows": int(combined_total_rows),
-        "zip_results": zip_results,
+        "scope_results": scope_results,
+        # Backward-compatible alias for older readers.
+        "zip_results": scope_results,
         "outputs": {
             "combined_csv": str(COMBINED_CSV_PATH),
             "combined_xlsx": str(COMBINED_XLSX_PATH),
@@ -974,12 +1013,16 @@ def _emit_incremental_health_report(report: dict[str, object], output_path: str 
     print(f"[incremental-health-report]{json.dumps(report, sort_keys=True)}")
 
 
-def run_full_mode() -> None:
+def run_full_mode(args: argparse.Namespace) -> None:
+    ingest_locations = _resolve_ingest_locations(args)
     combined_df = pd.DataFrame()
-    for zip_code in STR_FRIENDLY_ZIP_CODES:
-        frames = {lt: get_property_details(zip_code, lt, past_days=pdays) for lt, pdays in LISTING_SCRAPES}
+    for location_query in ingest_locations:
+        frames = {
+            lt: get_property_details(location_query, lt, past_days=pdays, scope_label=location_query)
+            for lt, pdays in LISTING_SCRAPES
+        }
         combined_df = pd.concat([combined_df, *frames.values()], ignore_index=True)
-        output_zip_folder(zip_code, frames)
+        output_scope_folder(location_query, frames)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     neighborhood_zip_csv = OUTPUT_DIR / "palm_springs_neighborhood_cap_by_zip.csv"
@@ -1012,30 +1055,32 @@ def run_full_mode() -> None:
 
 def run_incremental_mode(args: argparse.Namespace) -> None:
     window_start, window_end = resolve_window_from_args(args)
+    ingest_locations = _resolve_ingest_locations(args)
 
     frames: list[pd.DataFrame] = []
-    zip_results: list[dict[str, object]] = []
+    scope_results: list[dict[str, object]] = []
     scrape_error_count = 0
     scrape_attempt_count = 0
-    for zip_code in STR_FRIENDLY_ZIP_CODES:
+    for location_query in ingest_locations:
         listing_type_results: list[dict[str, object]] = []
         for listing_type in LISTING_TYPES_INCREMENTAL:
             scrape_attempt_count += 1
             error_message: str | None = None
             try:
                 df = get_property_details(
-                    zip_code,
+                    location_query,
                     listing_type,
                     date_from=window_start,
                     date_to=window_end,
+                    scope_label=location_query,
                 )
             except Exception as exc:
-                # Continue other ZIP/listing-type scrapes so one transient upstream
+                # Continue other scope/listing-type scrapes so one transient upstream
                 # failure does not abort the entire incremental pipeline.
                 scrape_error_count += 1
                 error_message = f"{type(exc).__name__}: {exc}"
                 print(
-                    f"[incremental-scrape-warning] zip={zip_code} listing_type={listing_type} "
+                    f"[incremental-scrape-warning] scope={location_query} listing_type={listing_type} "
                     f"failed with {error_message}"
                 )
                 df = pd.DataFrame()
@@ -1048,9 +1093,9 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
             )
             if not df.empty:
                 frames.append(df)
-        zip_results.append(
+        scope_results.append(
             {
-                "zip_code": zip_code,
+                "scope": location_query,
                 "attempted_listing_types": int(len(listing_type_results)),
                 "fetched_rows": int(sum(item["fetched_rows"] for item in listing_type_results)),
                 "non_empty_listing_types": int(sum(1 for item in listing_type_results if item["fetched_rows"] > 0)),
@@ -1095,7 +1140,7 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
     failure_reason = None
     if scrape_attempt_count > 0 and scrape_error_count == scrape_attempt_count:
         failure_reason = (
-            "Incremental scrape failed for all ZIP/listing-type requests "
+            "Incremental scrape failed for all scope/listing-type requests "
             f"for window {window_start.isoformat()} -> {window_end.isoformat()}."
         )
     elif summary["deduped_rows"] == 0 and not args.allow_empty_incremental:
@@ -1106,7 +1151,7 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
 
     report = _build_incremental_health_report(
         summary=summary,
-        zip_results=zip_results,
+        scope_results=scope_results,
         window_start=window_start,
         window_end=window_end,
         batch_run_at=batch_run_at,
@@ -1117,8 +1162,8 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
     _emit_incremental_health_report(report, args.health_report_output)
 
     if failure_reason:
-        zip_rollup = ", ".join(f"{item['zip_code']}={item['fetched_rows']}" for item in zip_results)
-        raise RuntimeError(f"{failure_reason} ZIP totals: {zip_rollup}")
+        scope_rollup = ", ".join(f"{item['scope']}={item['fetched_rows']}" for item in scope_results)
+        raise RuntimeError(f"{failure_reason} Scope totals: {scope_rollup}")
 
     combined_df = normalize_combined_export_columns(combined_df)
 
@@ -1144,7 +1189,7 @@ def run_incremental_mode(args: argparse.Namespace) -> None:
 def main() -> None:
     args = parse_args()
     if args.mode == "full":
-        run_full_mode()
+        run_full_mode(args)
     else:
         run_incremental_mode(args)
 

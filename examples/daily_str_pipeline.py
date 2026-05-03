@@ -10,6 +10,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_DIR = PROJECT_ROOT / "examples"
 ZIPS_DIR = EXAMPLES_DIR / "zips"
+DAILY_INGEST_LOCATIONS = (
+    "Palm Springs, CA",
+    "Bermuda Dunes, CA",
+    "Indio, CA",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +73,8 @@ def main() -> None:
     py = sys.executable
 
     scrape_cmd = [py, str(EXAMPLES_DIR / "scrape_listings_core.py"), "--mode", args.mode]
+    for location in DAILY_INGEST_LOCATIONS:
+        scrape_cmd.extend(["--ingest-location", location])
     if args.mode == "incremental":
         if args.run_date:
             scrape_cmd.extend(["--run-date", args.run_date])

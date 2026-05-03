@@ -1,4 +1,4 @@
-name: Sync Root index.html for GitHub Pages
+name: Optional Sync Root index.html for GitHub Pages
 
 on:
   workflow_dispatch:
@@ -8,6 +8,8 @@ permissions:
 
 jobs:
   sync:
+    # Compatibility workflow only.
+    # Canonical deploy artifact is publish/index.html from deploy_dashboard_firebase.yml.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

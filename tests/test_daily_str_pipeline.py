@@ -5,6 +5,12 @@ import json
 import sys
 from pathlib import Path
 
+EXPECTED_INGEST_LOCATIONS = [
+    "Palm Springs, CA",
+    "Bermuda Dunes, CA",
+    "Indio, CA",
+]
+
 
 def _load_module():
     repo_root = Path(__file__).resolve().parents[1]
@@ -19,6 +25,14 @@ def _load_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _extract_ingest_locations_from_cmd(cmd: list[str]) -> list[str]:
+    extracted: list[str] = []
+    for index, token in enumerate(cmd):
+        if token == "--ingest-location" and (index + 1) < len(cmd):
+            extracted.append(cmd[index + 1])
+    return extracted
 
 
 def test_daily_pipeline_runs_four_stages(monkeypatch):
@@ -51,6 +65,7 @@ def test_daily_pipeline_runs_four_stages(monkeypatch):
     ingest_cmd = recorded[0][1]
     assert "scrape_listings_core.py" in " ".join(ingest_cmd)
     assert "--mode" in ingest_cmd and "incremental" in ingest_cmd
+    assert _extract_ingest_locations_from_cmd(ingest_cmd) == EXPECTED_INGEST_LOCATIONS
     assert "--run-date" in ingest_cmd and "2026-04-25" in ingest_cmd
     assert any("str_suitability_filters.py" in " ".join(cmd) for _, cmd in recorded)
     assert any("coc_scorecard.py" in " ".join(cmd) for _, cmd in recorded)
@@ -96,9 +111,35 @@ def test_daily_pipeline_passes_ingest_reliability_flags(monkeypatch):
 
     module.main()
     ingest_cmd = recorded[0][1]
+    assert _extract_ingest_locations_from_cmd(ingest_cmd) == EXPECTED_INGEST_LOCATIONS
     assert "--allow-empty-incremental" in ingest_cmd
     assert "--health-report-output" in ingest_cmd
     assert "examples/zips/incremental_health_report.json" in ingest_cmd
+
+
+def test_daily_pipeline_full_mode_includes_explicit_three_city_scope(monkeypatch):
+    module = _load_module()
+    recorded: list[tuple[str, list[str]]] = []
+
+    def _fake_run(label: str, cmd: list[str]) -> None:
+        recorded.append((label, cmd))
+
+    monkeypatch.setattr(module, "_run_step", _fake_run)
+    monkeypatch.setattr(module, "_print_ingest_health_report", lambda _path: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "daily_str_pipeline.py",
+            "--mode",
+            "full",
+        ],
+    )
+
+    module.main()
+    ingest_cmd = recorded[0][1]
+    assert "--mode" in ingest_cmd and "full" in ingest_cmd
+    assert _extract_ingest_locations_from_cmd(ingest_cmd) == EXPECTED_INGEST_LOCATIONS
 
 
 def test_print_ingest_health_report_outputs_stable_json(tmp_path, capsys):

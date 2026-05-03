@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "homeharvest",
+    "staging": "homeharvest"
+  },
+  "targets": {},
+  "etags": {}
+}

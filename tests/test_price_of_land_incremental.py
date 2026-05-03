@@ -51,6 +51,43 @@ def test_resolve_window_from_args_override_dates():
     assert end.isoformat() == "2026-04-21T23:59:59-07:00"
 
 
+def test_default_ingest_scope_locations_are_exact_three_cities():
+    scrape_module = _load_scrape_listings_module()
+    assert scrape_module.INGEST_SCOPE_LOCATIONS == (
+        "Palm Springs, CA",
+        "Bermuda Dunes, CA",
+        "Indio, CA",
+    )
+    assert scrape_module.STR_SCOPE_CITIES == ("Palm Springs", "Bermuda Dunes", "Indio")
+
+
+def test_resolve_ingest_locations_defaults_to_exact_three_city_scope():
+    scrape_module = _load_scrape_listings_module()
+    args = SimpleNamespace(ingest_locations=None)
+    assert scrape_module._resolve_ingest_locations(args) == (
+        "Palm Springs, CA",
+        "Bermuda Dunes, CA",
+        "Indio, CA",
+    )
+
+
+def test_resolve_ingest_locations_raises_when_scope_constants_out_of_sync(monkeypatch):
+    scrape_module = _load_scrape_listings_module()
+    monkeypatch.setattr(scrape_module, "STR_SCOPE_CITIES", ("Palm Springs", "Indio"))
+    monkeypatch.setattr(
+        scrape_module,
+        "INGEST_SCOPE_LOCATIONS",
+        ("Palm Springs, CA", "Bermuda Dunes, CA", "Indio, CA"),
+    )
+
+    try:
+        scrape_module._resolve_ingest_locations(SimpleNamespace(ingest_locations=None))
+    except RuntimeError as exc:
+        assert "out of sync" in str(exc)
+    else:
+        raise AssertionError("Expected RuntimeError when ingest scope constants diverge.")
+
+
 def test_dedupe_batch_by_property_id_deterministic_order():
     scrape_module = _load_scrape_listings_module()
 
@@ -384,7 +421,11 @@ def test_enrich_and_enforce_required_baseline_fields():
         ]
     )
 
-    out = scrape_module.enrich_and_enforce_required_baseline_fields(rows, zip_code="92262", listing_type="for_sale")
+    out = scrape_module.enrich_and_enforce_required_baseline_fields(
+        rows,
+        scope_label="Palm Springs, CA",
+        listing_type="for_sale",
+    )
     assert set(out["property_id"]) == {"ok1"}
     kept = out.iloc[0]
     assert round(float(kept["price_per_sqft"]), 2) == 250.0
@@ -531,7 +572,7 @@ def test_get_property_details_applies_strict_city_scope(monkeypatch):
         [
             {
                 "property_url": "https://example.com/home/1",
-                "property_id": "in_scope",
+                "property_id": "in_scope_ps",
                 "style": "SINGLE_FAMILY",
                 "status": "FOR_SALE",
                 "street": "100 Main St",
@@ -542,6 +583,74 @@ def test_get_property_details_applies_strict_city_scope(monkeypatch):
                 "neighborhoods": "Baristo",
                 "latitude": 33.8,
                 "longitude": -116.5,
+                "beds": 3,
+                "full_baths": 2,
+                "half_baths": 0,
+                "sqft": 1800,
+                "year_built": 1990,
+                "days_on_mls": 2,
+                "list_date": "2026-04-23 08:00:00",
+                "last_sold_date": None,
+                "list_price": 550000,
+                "sold_price": None,
+                "price_per_sqft": 100.0,
+                "lot_sqft": 8712,
+                "lot_size_sqft": 8712,
+                "text": "A beautiful single-family listing.",
+                "listing_description": "A beautiful single-family listing.",
+                "hoa_fee": 365,
+                "hoa_monthly_fee": 365,
+                "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes"]}]',
+                "raw_tags": '["swimming_pool"]',
+                "raw_photo_tags": '[{"labels":["swimming_pool"]}]',
+            },
+            {
+                "property_url": "https://example.com/home/bermuda",
+                "property_id": "in_scope_bd",
+                "style": "SINGLE_FAMILY",
+                "status": "FOR_SALE",
+                "street": "101 Main St",
+                "city": "Bermuda Dunes",
+                "state": "CA",
+                "zip_code": "92203",
+                "county": "Riverside",
+                "neighborhoods": "Bermuda Dunes",
+                "latitude": 33.74,
+                "longitude": -116.29,
+                "beds": 3,
+                "full_baths": 2,
+                "half_baths": 0,
+                "sqft": 1800,
+                "year_built": 1990,
+                "days_on_mls": 2,
+                "list_date": "2026-04-23 08:00:00",
+                "last_sold_date": None,
+                "list_price": 550000,
+                "sold_price": None,
+                "price_per_sqft": 100.0,
+                "lot_sqft": 8712,
+                "lot_size_sqft": 8712,
+                "text": "A beautiful single-family listing.",
+                "listing_description": "A beautiful single-family listing.",
+                "hoa_fee": 365,
+                "hoa_monthly_fee": 365,
+                "raw_details": '[{"category":"Pool and Spa","text":["Pool Private: Yes"]}]',
+                "raw_tags": '["swimming_pool"]',
+                "raw_photo_tags": '[{"labels":["swimming_pool"]}]',
+            },
+            {
+                "property_url": "https://example.com/home/indio",
+                "property_id": "in_scope_indio",
+                "style": "SINGLE_FAMILY",
+                "status": "FOR_SALE",
+                "street": "102 Main St",
+                "city": "Indio",
+                "state": "CA",
+                "zip_code": "92201",
+                "county": "Riverside",
+                "neighborhoods": "Indio",
+                "latitude": 33.72,
+                "longitude": -116.21,
                 "beds": 3,
                 "full_baths": 2,
                 "half_baths": 0,
@@ -602,7 +711,7 @@ def test_get_property_details_applies_strict_city_scope(monkeypatch):
 
     monkeypatch.setattr(scrape_module, "scrape_property", lambda **kwargs: fake.copy())
     out = scrape_module.get_property_details("92262", "for_sale", past_days=30)
-    assert out["property_id"].astype(str).tolist() == ["in_scope"]
+    assert set(out["property_id"].astype(str)) == {"in_scope_ps", "in_scope_bd", "in_scope_indio"}
 
 
 def test_run_incremental_mode_fails_when_empty_and_allow_empty_is_disabled(tmp_path: Path, monkeypatch):
@@ -641,7 +750,7 @@ def test_run_incremental_mode_fails_when_empty_and_allow_empty_is_disabled(tmp_p
     report = json.loads((tmp_path / "health.json").read_text(encoding="utf-8"))
     assert report["status"] == "failure"
     assert report["summary"]["deduped_rows"] == 0
-    assert len(report["zip_results"]) == len(scrape_module.STR_FRIENDLY_ZIP_CODES)
+    assert len(report["scope_results"]) == len(scrape_module.INGEST_SCOPE_LOCATIONS)
 
 
 def test_run_incremental_mode_allows_empty_when_flag_enabled(tmp_path: Path, monkeypatch):
@@ -676,3 +785,81 @@ def test_run_incremental_mode_allows_empty_when_flag_enabled(tmp_path: Path, mon
     assert report["status"] == "success"
     assert report["allow_empty_incremental"] is True
     assert report["summary"]["deduped_rows"] == 0
+
+
+def test_run_incremental_mode_scrapes_city_scope_and_dedupes_cross_scope(tmp_path: Path, monkeypatch):
+    scrape_module = _load_scrape_listings_module()
+    expected_scopes = ["Palm Springs, CA", "Bermuda Dunes, CA", "Indio, CA"]
+    recorded_calls: list[str] = []
+
+    monkeypatch.setattr(
+        scrape_module,
+        "resolve_window_from_args",
+        lambda _args: (
+            pd.Timestamp("2026-04-21T00:00:00-07:00").to_pydatetime(),
+            pd.Timestamp("2026-04-23T23:59:59-07:00").to_pydatetime(),
+        ),
+    )
+
+    def _fake_get_property_details(location_query, listing_type, **_kwargs):
+        recorded_calls.append(location_query)
+        assert listing_type == "for_sale"
+        if location_query == "Palm Springs, CA":
+            return pd.DataFrame(
+                [
+                    {
+                        "property_id": "dup-1",
+                        "status": "FOR_SALE",
+                        "list_date": "2026-04-23 09:00:00",
+                        "street": "100 Main St",
+                        "city": "Palm Springs",
+                        "state": "CA",
+                    }
+                ]
+            )
+        if location_query == "Indio, CA":
+            return pd.DataFrame(
+                [
+                    {
+                        "property_id": "dup-1",
+                        "status": "FOR_SALE",
+                        "list_date": "2026-04-23 10:00:00",
+                        "street": "100 Main St",
+                        "city": "Indio",
+                        "state": "CA",
+                    },
+                    {
+                        "property_id": "unique-2",
+                        "status": "FOR_SALE",
+                        "list_date": "2026-04-23 11:00:00",
+                        "street": "200 Main St",
+                        "city": "Indio",
+                        "state": "CA",
+                    },
+                ]
+            )
+        return pd.DataFrame()
+
+    monkeypatch.setattr(scrape_module, "get_property_details", _fake_get_property_details)
+    monkeypatch.setattr(scrape_module, "enrich_with_palm_springs_str_neighborhoods", lambda df, **kwargs: df)
+    monkeypatch.setattr(scrape_module, "COMBINED_XLSX_PATH", tmp_path / "combined.xlsx")
+    monkeypatch.setattr(scrape_module, "COMBINED_CSV_PATH", tmp_path / "combined.csv")
+    monkeypatch.setattr(scrape_module, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(pd.DataFrame, "to_excel", lambda self, *args, **kwargs: None)
+
+    args = SimpleNamespace(
+        run_date=None,
+        date_from=None,
+        date_to=None,
+        lookback_days=3,
+        allow_empty_incremental=True,
+        health_report_output=str(tmp_path / "health.json"),
+    )
+
+    scrape_module.run_incremental_mode(args)
+    report = json.loads((tmp_path / "health.json").read_text(encoding="utf-8"))
+    assert [item["scope"] for item in report["scope_results"]] == expected_scopes
+    assert recorded_calls == expected_scopes
+    assert report["summary"]["fetched_rows"] == 3
+    assert report["summary"]["deduped_rows"] == 2
+    assert report["summary"]["new_rows"] == 2

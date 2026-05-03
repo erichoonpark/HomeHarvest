@@ -1,0 +1,76 @@
+name: Deploy Dashboard to Firebase Hosting
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dashboard-firebase-live
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-ansi
+
+      - name: Build publish bundle
+        run: bash ./scripts/build_dashboard_publish.sh
+
+      - name: Validate Firebase deploy credentials
+        env:
+          FIREBASE_SERVICE_ACCOUNT_HOMEHARVEST: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_HOMEHARVEST }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FIREBASE_SERVICE_ACCOUNT_HOMEHARVEST:-}" ]; then
+            echo "::error::Missing required secret FIREBASE_SERVICE_ACCOUNT_HOMEHARVEST."
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT_HOMEHARVEST", "").strip()
+          try:
+              payload = json.loads(raw)
+          except json.JSONDecodeError as exc:
+              print(f"::error::FIREBASE_SERVICE_ACCOUNT_HOMEHARVEST is not valid JSON: {exc}")
+              sys.exit(1)
+
+          required = {"type", "project_id", "client_email", "private_key"}
+          missing = sorted(key for key in required if not payload.get(key))
+          if missing:
+              print("::error::FIREBASE_SERVICE_ACCOUNT_HOMEHARVEST is missing required keys: " + ", ".join(missing))
+              sys.exit(1)
+          if payload.get("type") != "service_account":
+              print("::error::FIREBASE_SERVICE_ACCOUNT_HOMEHARVEST must have type=service_account.")
+              sys.exit(1)
+          print("Firebase deploy credentials validated.")
+          PY
+
+      - name: Deploy to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: "${{ secrets.GITHUB_TOKEN }}"
+          firebaseServiceAccount: "${{ secrets.FIREBASE_SERVICE_ACCOUNT_HOMEHARVEST }}"
+          projectId: "homeharvest"
+          channelId: live
