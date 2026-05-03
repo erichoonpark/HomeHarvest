@@ -22,6 +22,7 @@ jobs:
       HEALTH_REPORT_PATH: examples/zips/incremental_health_report.json
       RELIABILITY_ISSUE_LABEL: daily-scrape
       RELIABILITY_ISSUE_TITLE: Daily incremental scrape reliability alert
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Checkout repository
@@ -31,12 +32,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: poetry
+          cache-dependency-path: poetry.lock
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install poetry
-          poetry install --no-interaction
+          pip install "poetry==1.8.3"
+          poetry install --no-interaction --no-ansi --sync
           poetry run pip install -e .
           poetry run pip install openpyxl
 
@@ -50,11 +53,30 @@ jobs:
         run: poetry run python -c "import homeharvest; print(homeharvest.__file__)"
 
       - name: Run daily STR pipeline
-        run: >
-          poetry run python examples/daily_str_pipeline.py
-          --mode incremental
-          --allow-empty-incremental
-          --health-report-output "$HEALTH_REPORT_PATH"
+        run: |
+          set -euo pipefail
+          attempt=1
+          max_attempts=3
+          until [ "$attempt" -gt "$max_attempts" ]; do
+            echo "Daily STR pipeline attempt ${attempt}/${max_attempts}"
+            if poetry run python examples/daily_str_pipeline.py \
+              --mode incremental \
+              --allow-empty-incremental \
+              --health-report-output "$HEALTH_REPORT_PATH"; then
+              echo "Daily STR pipeline succeeded on attempt ${attempt}."
+              break
+            fi
+
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              echo "Daily STR pipeline failed after ${max_attempts} attempts."
+              exit 1
+            fi
+
+            sleep_seconds=$((30 * (2 ** (attempt - 1))))
+            echo "Attempt ${attempt} failed. Retrying in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+            attempt=$((attempt + 1))
+          done
 
       - name: Upload incremental health report
         if: always() && hashFiles('examples/zips/incremental_health_report.json') != ''
@@ -79,7 +101,7 @@ jobs:
           report_path = Path("examples/zips/incremental_health_report.json")
           report = json.loads(report_path.read_text(encoding="utf-8"))
           summary = report.get("summary", {})
-          zip_results = report.get("zip_results", [])
+          scope_results = report.get("scope_results", report.get("zip_results", []))
           lines = [
               "### Incremental scrape health report",
               f"- Status: {report.get('status', 'unknown')}",
@@ -94,10 +116,11 @@ jobs:
           failure_reason = report.get("failure_reason")
           if failure_reason:
               lines.append(f"- Failure reason: {failure_reason}")
-          if zip_results:
-              lines.append("- ZIP totals:")
-              for item in zip_results:
-                  lines.append(f"  - {item.get('zip_code')}: {item.get('fetched_rows', 0)}")
+          if scope_results:
+              lines.append("- Scope totals:")
+              for item in scope_results:
+                  scope_name = item.get("scope") or item.get("zip_code")
+                  lines.append(f"  - {scope_name}: {item.get('fetched_rows', 0)}")
           with Path(__import__("os").environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as fh:
               fh.write("\n".join(lines) + "\n")
           PY
@@ -267,18 +290,44 @@ jobs:
       - name: Commit and push daily updates to master
         if: steps.detect_changes.outputs.changed == 'true'
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f \
-            examples/zips/combined.csv
-            examples/zips/combined.xlsx
-            examples/zips/str_suitability_filter.xlsx
-            examples/zips/coc_scorecard.xlsx
-            examples/zips/coc_dashboard.html
+            examples/zips/combined.csv \
+            examples/zips/combined.xlsx \
+            examples/zips/str_suitability_filter.xlsx \
+            examples/zips/coc_scorecard.xlsx \
+            examples/zips/coc_dashboard.html \
             examples/zips/incremental_health_report.json
           if git diff --cached --quiet; then
             echo "No staged changes after add-paths filter."
             exit 0
           fi
           git commit -m "chore(data): daily incremental listings update"
-          git push origin HEAD:master
+          attempt=1
+          max_attempts=3
+          until [ "$attempt" -gt "$max_attempts" ]; do
+            echo "Push attempt ${attempt}/${max_attempts}"
+            if git push origin HEAD:master; then
+              echo "Push succeeded on attempt ${attempt}."
+              break
+            fi
+
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              echo "Push failed after ${max_attempts} attempts."
+              exit 1
+            fi
+
+            echo "Push attempt ${attempt} failed. Fetching latest origin/master and rebasing."
+            git fetch origin master
+            if ! git rebase origin/master; then
+              echo "Unable to rebase onto origin/master during push retry."
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep_seconds=$((15 * attempt))
+            echo "Retrying push in ${sleep_seconds}s..."
+            sleep "$sleep_seconds"
+            attempt=$((attempt + 1))
+          done

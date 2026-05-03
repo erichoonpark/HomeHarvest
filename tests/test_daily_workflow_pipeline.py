@@ -32,6 +32,8 @@ def test_daily_workflow_runs_full_pipeline_and_tracks_outputs():
     assert "examples/zips/incremental_health_report.json" in text
     assert "timeout-minutes: 45" in text
     assert "issues: write" in text
+    assert "cache: poetry" in text
+    assert 'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in text
     assert '--health-report-output "$HEALTH_REPORT_PATH"' in text
     assert "Upload incremental health report" in text
     assert "Publish incremental scrape summary" in text
@@ -39,6 +41,21 @@ def test_daily_workflow_runs_full_pipeline_and_tracks_outputs():
     assert "Escalate reliability issue on consecutive failures" in text
     assert "Resolve reliability issue on recovery" in text
     assert "steps.previous_run_status.outputs.previous_failed == 'true'" in text
+    assert "Daily STR pipeline attempt ${attempt}/${max_attempts}" in text
+    assert "sleep_seconds=$((30 * (2 ** (attempt - 1))))" in text
+    assert "Push attempt ${attempt}/${max_attempts}" in text
+    assert "git fetch origin master" in text
+    assert "git rebase origin/master" in text
+    assert "git rebase --abort || true" in text
+    assert (
+        "git add -f \\\n"
+        "            examples/zips/combined.csv \\\n"
+        "            examples/zips/combined.xlsx \\\n"
+        "            examples/zips/str_suitability_filter.xlsx \\\n"
+        "            examples/zips/coc_scorecard.xlsx \\\n"
+        "            examples/zips/coc_dashboard.html \\\n"
+        "            examples/zips/incremental_health_report.json"
+    ) in text
 
 
 def test_daily_workflow_has_one_daily_cron_schedule():
