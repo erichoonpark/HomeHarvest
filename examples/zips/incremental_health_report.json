@@ -1,6 +1,6 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-05-12T06:10:32.612205-07:00",
+  "batch_run_at": "2026-05-12T08:46:23.155851-07:00",
   "combined_total_rows": 2563,
   "failure_reason": null,
   "mode": "incremental",
@@ -52,10 +52,10 @@
   "status": "success",
   "summary": {
     "deduped_rows": 15,
-    "existing_overlap_rows": 12,
+    "existing_overlap_rows": 15,
     "fetched_rows": 15,
-    "new_rows": 3,
-    "refreshed_same_status_rows": 12,
+    "new_rows": 0,
+    "refreshed_same_status_rows": 15,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 0,
     "unchanged_overlap_rows": 0,
