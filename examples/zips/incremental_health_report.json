@@ -1,7 +1,7 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-06-01T11:50:58.523508-07:00",
-  "combined_total_rows": 2694,
+  "batch_run_at": "2026-06-02T10:49:17.488151-07:00",
+  "combined_total_rows": 2700,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
@@ -37,11 +37,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 10,
+      "fetched_rows": 6,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 10,
+          "fetched_rows": 6,
           "listing_type": "for_sale"
         }
       ],
@@ -51,18 +51,18 @@
   ],
   "status": "success",
   "summary": {
-    "deduped_rows": 17,
-    "existing_overlap_rows": 14,
-    "fetched_rows": 17,
-    "new_rows": 3,
-    "refreshed_same_status_rows": 13,
+    "deduped_rows": 13,
+    "existing_overlap_rows": 7,
+    "fetched_rows": 13,
+    "new_rows": 6,
+    "refreshed_same_status_rows": 6,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 1,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-05-31T23:59:59-07:00",
-  "window_start": "2026-05-29T00:00:00-07:00",
+  "window_end": "2026-06-01T23:59:59-07:00",
+  "window_start": "2026-05-30T00:00:00-07:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
@@ -92,11 +92,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 10,
+      "fetched_rows": 6,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 10,
+          "fetched_rows": 6,
           "listing_type": "for_sale"
         }
       ],
