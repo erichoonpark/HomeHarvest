@@ -1,7 +1,7 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-06-08T09:53:13.486452-07:00",
-  "combined_total_rows": 2731,
+  "batch_run_at": "2026-06-09T09:13:06.419820-07:00",
+  "combined_total_rows": 2732,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
@@ -24,11 +24,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 2,
+      "fetched_rows": 1,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 2,
+          "fetched_rows": 1,
           "listing_type": "for_sale"
         }
       ],
@@ -37,11 +37,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 8,
+      "fetched_rows": 3,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 8,
+          "fetched_rows": 3,
           "listing_type": "for_sale"
         }
       ],
@@ -51,18 +51,18 @@
   ],
   "status": "success",
   "summary": {
-    "deduped_rows": 13,
-    "existing_overlap_rows": 11,
-    "fetched_rows": 13,
-    "new_rows": 2,
-    "refreshed_same_status_rows": 11,
+    "deduped_rows": 7,
+    "existing_overlap_rows": 6,
+    "fetched_rows": 7,
+    "new_rows": 1,
+    "refreshed_same_status_rows": 6,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 0,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-06-07T23:59:59-07:00",
-  "window_start": "2026-06-05T00:00:00-07:00",
+  "window_end": "2026-06-08T23:59:59-07:00",
+  "window_start": "2026-06-06T00:00:00-07:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
@@ -79,11 +79,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 2,
+      "fetched_rows": 1,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 2,
+          "fetched_rows": 1,
           "listing_type": "for_sale"
         }
       ],
@@ -92,11 +92,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 8,
+      "fetched_rows": 3,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 8,
+          "fetched_rows": 3,
           "listing_type": "for_sale"
         }
       ],
