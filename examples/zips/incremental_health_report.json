@@ -1,7 +1,7 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-06-11T10:01:44.879047-07:00",
-  "combined_total_rows": 2746,
+  "batch_run_at": "2026-06-12T09:27:31.877853-07:00",
+  "combined_total_rows": 2756,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
@@ -11,11 +11,11 @@
   "scope_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 7,
+      "fetched_rows": 9,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 7,
+          "fetched_rows": 9,
           "listing_type": "for_sale"
         }
       ],
@@ -24,11 +24,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 1,
+      "fetched_rows": 2,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 1,
+          "fetched_rows": 2,
           "listing_type": "for_sale"
         }
       ],
@@ -37,11 +37,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 9,
+      "fetched_rows": 10,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 9,
+          "fetched_rows": 10,
           "listing_type": "for_sale"
         }
       ],
@@ -51,26 +51,26 @@
   ],
   "status": "success",
   "summary": {
-    "deduped_rows": 17,
-    "existing_overlap_rows": 12,
-    "fetched_rows": 17,
-    "new_rows": 5,
-    "refreshed_same_status_rows": 11,
+    "deduped_rows": 21,
+    "existing_overlap_rows": 11,
+    "fetched_rows": 21,
+    "new_rows": 10,
+    "refreshed_same_status_rows": 10,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 1,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-06-10T23:59:59-07:00",
-  "window_start": "2026-06-08T00:00:00-07:00",
+  "window_end": "2026-06-11T23:59:59-07:00",
+  "window_start": "2026-06-09T00:00:00-07:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 7,
+      "fetched_rows": 9,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 7,
+          "fetched_rows": 9,
           "listing_type": "for_sale"
         }
       ],
@@ -79,11 +79,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 1,
+      "fetched_rows": 2,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 1,
+          "fetched_rows": 2,
           "listing_type": "for_sale"
         }
       ],
@@ -92,11 +92,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 9,
+      "fetched_rows": 10,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 9,
+          "fetched_rows": 10,
           "listing_type": "for_sale"
         }
       ],
