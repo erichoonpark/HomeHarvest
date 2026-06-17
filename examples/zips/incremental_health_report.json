@@ -1,7 +1,7 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-06-16T11:09:05.852452-07:00",
-  "combined_total_rows": 2776,
+  "batch_run_at": "2026-06-17T09:43:04.963131-07:00",
+  "combined_total_rows": 2781,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
@@ -11,15 +11,15 @@
   "scope_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 0,
+      "fetched_rows": 2,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 0,
+          "fetched_rows": 2,
           "listing_type": "for_sale"
         }
       ],
-      "non_empty_listing_types": 0,
+      "non_empty_listing_types": 1,
       "scope": "Palm Springs, CA"
     },
     {
@@ -51,30 +51,30 @@
   ],
   "status": "success",
   "summary": {
-    "deduped_rows": 4,
-    "existing_overlap_rows": 4,
-    "fetched_rows": 4,
-    "new_rows": 0,
-    "refreshed_same_status_rows": 4,
+    "deduped_rows": 6,
+    "existing_overlap_rows": 1,
+    "fetched_rows": 6,
+    "new_rows": 5,
+    "refreshed_same_status_rows": 1,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 0,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-06-15T23:59:59-07:00",
-  "window_start": "2026-06-13T00:00:00-07:00",
+  "window_end": "2026-06-16T23:59:59-07:00",
+  "window_start": "2026-06-14T00:00:00-07:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 0,
+      "fetched_rows": 2,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 0,
+          "fetched_rows": 2,
           "listing_type": "for_sale"
         }
       ],
-      "non_empty_listing_types": 0,
+      "non_empty_listing_types": 1,
       "scope": "Palm Springs, CA"
     },
     {
