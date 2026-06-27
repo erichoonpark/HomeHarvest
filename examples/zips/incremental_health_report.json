@@ -1,7 +1,7 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-06-26T08:30:51.062972-07:00",
-  "combined_total_rows": 2824,
+  "batch_run_at": "2026-06-27T07:54:49.034897-07:00",
+  "combined_total_rows": 2826,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
@@ -11,11 +11,11 @@
   "scope_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 6,
+      "fetched_rows": 5,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 6,
+          "fetched_rows": 5,
           "listing_type": "for_sale"
         }
       ],
@@ -37,11 +37,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 7,
+      "fetched_rows": 4,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 7,
+          "fetched_rows": 4,
           "listing_type": "for_sale"
         }
       ],
@@ -51,26 +51,26 @@
   ],
   "status": "success",
   "summary": {
-    "deduped_rows": 13,
+    "deduped_rows": 9,
     "existing_overlap_rows": 7,
-    "fetched_rows": 13,
-    "new_rows": 6,
+    "fetched_rows": 9,
+    "new_rows": 2,
     "refreshed_same_status_rows": 7,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 0,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-06-25T23:59:59-07:00",
-  "window_start": "2026-06-23T00:00:00-07:00",
+  "window_end": "2026-06-26T23:59:59-07:00",
+  "window_start": "2026-06-24T00:00:00-07:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 6,
+      "fetched_rows": 5,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 6,
+          "fetched_rows": 5,
           "listing_type": "for_sale"
         }
       ],
@@ -92,11 +92,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 7,
+      "fetched_rows": 4,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 7,
+          "fetched_rows": 4,
           "listing_type": "for_sale"
         }
       ],
