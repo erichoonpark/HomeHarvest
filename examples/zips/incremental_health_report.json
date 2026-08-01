@@ -1,7 +1,7 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-07-31T08:28:08.725722-07:00",
-  "combined_total_rows": 2984,
+  "batch_run_at": "2026-08-01T07:40:22.025493-07:00",
+  "combined_total_rows": 2989,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
@@ -11,29 +11,16 @@
   "scope_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 0,
+      "fetched_rows": 3,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 0,
-          "listing_type": "for_sale"
-        }
-      ],
-      "non_empty_listing_types": 0,
-      "scope": "Palm Springs, CA"
-    },
-    {
-      "attempted_listing_types": 1,
-      "fetched_rows": 1,
-      "listing_type_results": [
-        {
-          "error": null,
-          "fetched_rows": 1,
+          "fetched_rows": 3,
           "listing_type": "for_sale"
         }
       ],
       "non_empty_listing_types": 1,
-      "scope": "Bermuda Dunes, CA"
+      "scope": "Palm Springs, CA"
     },
     {
       "attempted_listing_types": 1,
@@ -42,6 +29,19 @@
         {
           "error": null,
           "fetched_rows": 2,
+          "listing_type": "for_sale"
+        }
+      ],
+      "non_empty_listing_types": 1,
+      "scope": "Bermuda Dunes, CA"
+    },
+    {
+      "attempted_listing_types": 1,
+      "fetched_rows": 3,
+      "listing_type_results": [
+        {
+          "error": null,
+          "fetched_rows": 3,
           "listing_type": "for_sale"
         }
       ],
@@ -51,44 +51,31 @@
   ],
   "status": "success",
   "summary": {
-    "deduped_rows": 3,
-    "existing_overlap_rows": 1,
-    "fetched_rows": 3,
-    "new_rows": 2,
-    "refreshed_same_status_rows": 1,
+    "deduped_rows": 8,
+    "existing_overlap_rows": 3,
+    "fetched_rows": 8,
+    "new_rows": 5,
+    "refreshed_same_status_rows": 3,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 0,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-07-30T23:59:59-07:00",
-  "window_start": "2026-07-28T00:00:00-07:00",
+  "window_end": "2026-07-31T23:59:59-07:00",
+  "window_start": "2026-07-29T00:00:00-07:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 0,
+      "fetched_rows": 3,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 0,
-          "listing_type": "for_sale"
-        }
-      ],
-      "non_empty_listing_types": 0,
-      "scope": "Palm Springs, CA"
-    },
-    {
-      "attempted_listing_types": 1,
-      "fetched_rows": 1,
-      "listing_type_results": [
-        {
-          "error": null,
-          "fetched_rows": 1,
+          "fetched_rows": 3,
           "listing_type": "for_sale"
         }
       ],
       "non_empty_listing_types": 1,
-      "scope": "Bermuda Dunes, CA"
+      "scope": "Palm Springs, CA"
     },
     {
       "attempted_listing_types": 1,
@@ -97,6 +84,19 @@
         {
           "error": null,
           "fetched_rows": 2,
+          "listing_type": "for_sale"
+        }
+      ],
+      "non_empty_listing_types": 1,
+      "scope": "Bermuda Dunes, CA"
+    },
+    {
+      "attempted_listing_types": 1,
+      "fetched_rows": 3,
+      "listing_type_results": [
+        {
+          "error": null,
+          "fetched_rows": 3,
           "listing_type": "for_sale"
         }
       ],
