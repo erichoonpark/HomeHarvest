@@ -1,7 +1,7 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-08-30T10:27:20.649804-07:00",
-  "combined_total_rows": 3121,
+  "batch_run_at": "2026-08-31T12:29:57.001140-07:00",
+  "combined_total_rows": 3127,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
@@ -11,11 +11,11 @@
   "scope_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 10,
+      "fetched_rows": 7,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 10,
+          "fetched_rows": 7,
           "listing_type": "for_sale"
         }
       ],
@@ -37,11 +37,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 8,
+      "fetched_rows": 11,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 8,
+          "fetched_rows": 11,
           "listing_type": "for_sale"
         }
       ],
@@ -55,22 +55,22 @@
     "existing_overlap_rows": 13,
     "fetched_rows": 20,
     "new_rows": 6,
-    "refreshed_same_status_rows": 13,
+    "refreshed_same_status_rows": 12,
     "skipped_overlap_rows": 0,
-    "status_updated_rows": 0,
+    "status_updated_rows": 1,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-08-29T23:59:59-07:00",
-  "window_start": "2026-08-27T00:00:00-07:00",
+  "window_end": "2026-08-30T23:59:59-07:00",
+  "window_start": "2026-08-28T00:00:00-07:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 10,
+      "fetched_rows": 7,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 10,
+          "fetched_rows": 7,
           "listing_type": "for_sale"
         }
       ],
@@ -92,11 +92,11 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 8,
+      "fetched_rows": 11,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 8,
+          "fetched_rows": 11,
           "listing_type": "for_sale"
         }
       ],
