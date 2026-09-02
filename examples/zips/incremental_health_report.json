@@ -1,7 +1,7 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-09-01T10:19:08.045058-07:00",
-  "combined_total_rows": 3132,
+  "batch_run_at": "2026-09-02T10:09:39.975866-07:00",
+  "combined_total_rows": 3135,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
@@ -24,24 +24,24 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 2,
+      "fetched_rows": 0,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 2,
+          "fetched_rows": 0,
           "listing_type": "for_sale"
         }
       ],
-      "non_empty_listing_types": 1,
+      "non_empty_listing_types": 0,
       "scope": "Bermuda Dunes, CA"
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 12,
+      "fetched_rows": 9,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 12,
+          "fetched_rows": 9,
           "listing_type": "for_sale"
         }
       ],
@@ -51,18 +51,18 @@
   ],
   "status": "success",
   "summary": {
-    "deduped_rows": 14,
-    "existing_overlap_rows": 9,
-    "fetched_rows": 15,
-    "new_rows": 5,
-    "refreshed_same_status_rows": 9,
+    "deduped_rows": 10,
+    "existing_overlap_rows": 7,
+    "fetched_rows": 10,
+    "new_rows": 3,
+    "refreshed_same_status_rows": 7,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 0,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-08-31T23:59:59-07:00",
-  "window_start": "2026-08-29T00:00:00-07:00",
+  "window_end": "2026-09-01T23:59:59-07:00",
+  "window_start": "2026-08-30T00:00:00-07:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
@@ -79,24 +79,24 @@
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 2,
+      "fetched_rows": 0,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 2,
+          "fetched_rows": 0,
           "listing_type": "for_sale"
         }
       ],
-      "non_empty_listing_types": 1,
+      "non_empty_listing_types": 0,
       "scope": "Bermuda Dunes, CA"
     },
     {
       "attempted_listing_types": 1,
-      "fetched_rows": 12,
+      "fetched_rows": 9,
       "listing_type_results": [
         {
           "error": null,
-          "fetched_rows": 12,
+          "fetched_rows": 9,
           "listing_type": "for_sale"
         }
       ],
