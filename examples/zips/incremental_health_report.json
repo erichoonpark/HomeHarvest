@@ -1,7 +1,7 @@
 {
   "allow_empty_incremental": true,
-  "batch_run_at": "2026-11-15T11:21:18.107486-08:00",
-  "combined_total_rows": 3545,
+  "batch_run_at": "2026-11-16T14:52:38.706908-08:00",
+  "combined_total_rows": 3547,
   "failure_reason": null,
   "mode": "incremental",
   "outputs": {
@@ -52,17 +52,17 @@
   "status": "success",
   "summary": {
     "deduped_rows": 19,
-    "existing_overlap_rows": 12,
+    "existing_overlap_rows": 17,
     "fetched_rows": 25,
-    "new_rows": 7,
-    "refreshed_same_status_rows": 12,
+    "new_rows": 2,
+    "refreshed_same_status_rows": 17,
     "skipped_overlap_rows": 0,
     "status_updated_rows": 0,
     "unchanged_overlap_rows": 0,
     "unchanged_rows": 0
   },
-  "window_end": "2026-11-14T23:59:59-08:00",
-  "window_start": "2026-11-12T00:00:00-08:00",
+  "window_end": "2026-11-15T23:59:59-08:00",
+  "window_start": "2026-11-13T00:00:00-08:00",
   "zip_results": [
     {
       "attempted_listing_types": 1,
